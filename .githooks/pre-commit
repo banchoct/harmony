@@ -1,0 +1,3 @@
+#!/bin/sh
+# A commit is refused when the type check or the tests fail.
+exec npm run --silent check
