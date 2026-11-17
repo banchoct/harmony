@@ -15,7 +15,14 @@ export interface ConsoleChannel extends Channel {
   finished: Promise<void>;
 }
 
-export function createConsoleChannel(io?: { input?: Readable; output?: Writable }): ConsoleChannel {
+/**
+ * `onCommand` gets every line that is not a message and returns what to print, or null when
+ * the line means nothing to it.
+ */
+export function createConsoleChannel(
+  io?: { input?: Readable; output?: Writable },
+  onCommand?: (line: string) => Promise<string | null>,
+): ConsoleChannel {
   const input = io?.input ?? process.stdin;
   const output = io?.output ?? process.stdout;
   let handler: MessageHandler | null = null;
@@ -37,21 +44,21 @@ export function createConsoleChannel(io?: { input?: Readable; output?: Writable 
       reader = createInterface({ input });
       reader.on("line", (line) => {
         const parsed = parseConsoleLine(line);
-        if (!parsed) {
-          if (line.trim()) output.write("?? Escribe el teléfono y luego el mensaje: +5215500000002 hola\n");
-          return;
-        }
-        const message = {
-          id: randomUUID(),
-          fromPhone: parsed.phone,
-          text: parsed.text,
-          receivedAt: new Date().toISOString(),
-        };
-        // One message at a time, in the order typed.
+        // One line at a time, in the order typed.
         queue = queue.then(async () => {
           try {
-            if (!handler) throw new Error("NO_HANDLER");
-            await handler(message);
+            if (parsed) {
+              if (!handler) throw new Error("NO_HANDLER");
+              await handler({
+                id: randomUUID(),
+                fromPhone: parsed.phone,
+                text: parsed.text,
+                receivedAt: new Date().toISOString(),
+              });
+            } else if (line.trim()) {
+              const answer = await onCommand?.(line.trim());
+              output.write(`${answer ?? "?? Escribe el teléfono y luego el mensaje: +5215500000002 hola"}\n`);
+            }
           } catch (error) {
             output.write(`!! No se pudo procesar el mensaje: ${error instanceof Error ? error.message : error}\n`);
           }

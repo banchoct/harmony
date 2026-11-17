@@ -11,7 +11,8 @@
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "check": "npm run typecheck && npm test",
-    "prepare": "git config core.hooksPath .githooks"
+    "prepare": "git config core.hooksPath .githooks",
+    "consola": "node --import tsx src/console.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.10.0",

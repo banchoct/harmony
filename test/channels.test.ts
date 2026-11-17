@@ -68,3 +68,18 @@ test("a message that fails does not stop the console from handling the next one"
 test("stopping a console channel that never started returns", async () => {
   await createConsoleChannel({ input: new PassThrough(), output: new PassThrough() }).stop();
 });
+
+test("a console line that is not a message goes to the command hook and its answer is printed", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let printed = "";
+  output.on("data", (chunk: Buffer) => (printed += chunk.toString()));
+  const channel = createConsoleChannel({ input, output }, async (line) => (line === "registro" ? "Contestó sola: 3" : null));
+  channel.onMessage(async () => {});
+  await channel.start();
+  input.write("registro\notra cosa\n");
+  input.end();
+  await channel.finished;
+  assert.match(printed, /Contestó sola: 3\n/);
+  assert.match(printed, /\?\? /);
+});
