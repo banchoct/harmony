@@ -44,3 +44,12 @@ export function scriptedModel(...steps: Step[]): ScriptedModel {
 export function shownTo(request: ModelRequest): string {
   return JSON.stringify([request.system, request.messages]);
 }
+
+/** The id the model was shown for something, e.g. `[pregunta <id>]`. Picks the last one shown. */
+export function idShown(request: ModelRequest, label: "nota" | "pregunta" | "propuesta" | "persona", near = ""): string {
+  const shown = request.system.map((block) => block.text).join("\n");
+  const lines = shown.split("\n").filter((line) => line.includes(`[${label} `) && line.includes(near));
+  const match = /\[(?:nota|pregunta|propuesta|persona) ([0-9a-f-]{36})/.exec(lines.at(-1) ?? "");
+  if (!match?.[1]) throw new Error(`NO_${label.toUpperCase()}_SHOWN`);
+  return match[1];
+}

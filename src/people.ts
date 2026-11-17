@@ -34,10 +34,10 @@ export async function addPerson(
   }
 }
 
-/** Identity: the person whose phone a message came from, or null. */
+/** Identity: the active person whose phone a message came from, or null. */
 export async function findPersonByPhone(db: Db, fromPhone: string): Promise<Person | null> {
   const phone = normalizePhone(fromPhone);
   if (!phone) return null;
-  const rows = await db.query<Person>(`SELECT ${COLUMNS} FROM people WHERE phone = $1`, [phone]);
+  const rows = await db.query<Person>(`SELECT ${COLUMNS} FROM people WHERE phone = $1 AND active`, [phone]);
   return rows[0] ?? null;
 }

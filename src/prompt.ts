@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type { OpenItems } from "./actions.js";
 import type { HouseView } from "./memory.js";
 import type { Person, PersonKind } from "./people.js";
 
@@ -18,12 +19,18 @@ Cómo trabajas:
 - Termina siempre con la herramienta responder, que le envía tu mensaje a la persona.`;
 
 const BY_KIND: Record<PersonKind, string> = {
-  coordinator: `Hablas con quien lleva la casa. Ve toda la memoria y tiene autoridad sobre ella.`,
+  coordinator: `Hablas con quien lleva la casa. Ve toda la memoria y tiene autoridad sobre ella.
+- Cuando te enseñe algo de la casa, guárdalo con guardar_nota: una nota por tema, completa y clara para quien no vio la conversación. Decide quién la ve: lo general de la casa, todos; lo que es asunto de una sola persona, solo esa persona; lo de salud, siempre restringida a quien lo necesita para su trabajo.
+- Cuando corrija algo, usa corregir_nota sobre la nota que ya existe; si algo ya no aplica, retirar_nota. No dupliques notas.
+- Si su mensaje contesta una pregunta pendiente, usa responder_pendiente: le manda la respuesta a quien preguntó y la guarda.
+- Si una instrucción es ambigua (por ejemplo, si es solo por hoy o de ahora en adelante), haz una sola pregunta de aclaración antes de guardar.
+- Un cambio de salud no se guarda directo: queda como propuesta. Dile en una línea lo que entendiste y pide su sí. Cuando conteste sí o no, usa confirmar.
+- Guarda solo lo que te dijo. No agregues nada por tu cuenta.`,
   staff: `Hablas con una persona del personal. Si pregunta algo que la memoria no contesta, usa subir_pregunta para pasárselo a quien lleva la casa, y dile que ya lo preguntaste y que le avisas en cuanto haya respuesta.`,
   member: `Hablas con un miembro de la familia. Si pregunta algo que la memoria no contesta, usa subir_pregunta para pasárselo a quien lleva la casa, y dile que ya lo preguntaste y que le avisas en cuanto haya respuesta.`,
 };
 
-function renderHouse(person: Person, view: HouseView): string {
+function renderHouse(person: Person, view: HouseView, open: OpenItems | null): string {
   const seesAll = person.kind === "coordinator";
   const nameOf = new Map(view.people.map((p) => [p.id, p.name]));
   const names = (ids: string[]) => ids.map((id) => nameOf.get(id) ?? "?").join(", ");
@@ -42,17 +49,27 @@ function renderHouse(person: Person, view: HouseView): string {
     `Hablas con ${person.name} (${KIND_LABEL[person.kind]}).`,
     `Personas de la casa:\n${people.join("\n")}`,
     `Memoria de la casa:\n${notes.length ? notes.join("\n") : "(todavía no hay nada guardado)"}`,
-  ].join("\n\n");
+    open?.questions.length
+      ? `Preguntas pendientes de contestar:\n${open.questions
+          .map((q) => `- ${q.askedBy} preguntó: «${q.question}» [pregunta ${q.id}]`)
+          .join("\n")}`
+      : "",
+    open?.proposals.length
+      ? `Propuestas que esperan un sí o un no:\n${open.proposals.map((p) => `- ${p.summary} [propuesta ${p.id}]`).join("\n")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 /**
  * The instructions, then the house as this person may see it. The first block is the same on
  * every turn of the same kind of person, so it is the cache boundary.
  */
-export function buildSystem(person: Person, view: HouseView): Anthropic.TextBlockParam[] {
+export function buildSystem(person: Person, view: HouseView, open: OpenItems | null): Anthropic.TextBlockParam[] {
   return [
     { type: "text", text: `${BASE}\n\n${BY_KIND[person.kind]}`, cache_control: { type: "ephemeral" } },
-    { type: "text", text: renderHouse(person, view) },
+    { type: "text", text: renderHouse(person, view, open) },
   ];
 }
 

@@ -1,5 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { z } from "zod";
+import { openItems, Refused } from "./actions.js";
 import type { Channel, InboundMessage } from "./channel.js";
 import type { Db } from "./db.js";
 import { deliverPending, enqueue } from "./delivery.js";
@@ -57,7 +58,9 @@ async function recentMessages(db: Db, person: Person): Promise<PastMessage[]> {
 async function runTurn(deps: TurnDeps, person: Person, history: PastMessage[], text: string): Promise<void> {
   const { db, model } = deps;
   const tools = toolsFor(person);
-  const system = buildSystem(person, await houseViewFor(db, person));
+  // What waits on whoever runs the home is shown to them only.
+  const open = person.kind === "coordinator" ? await openItems(db) : null;
+  const system = buildSystem(person, await houseViewFor(db, person), open);
   const messages: Anthropic.MessageParam[] = [
     {
       role: "user",
@@ -72,12 +75,13 @@ async function runTurn(deps: TurnDeps, person: Person, history: PastMessage[], t
   ];
   let escalated = false;
 
-  const finish = async (reply: string, kind: "respuesta_a_pregunta" | "otro" | null) => {
+  const finish = async (reply: string, kind: z.infer<typeof replyInput>["tipo"] | null) => {
     if (!reply.trim()) throw new Error("EMPTY_REPLY");
     await enqueue(db, person.id, reply);
     // "Answered alone" counts only a question from someone who does not run the home,
     // answered from memory without passing it up.
     if (kind === null) await recordEvent(db, "unclassified_reply", person.id);
+    else if (kind === "pregunta_de_aclaracion") await recordEvent(db, "clarification_asked", person.id);
     else if (kind === "respuesta_a_pregunta" && !escalated && person.kind !== "coordinator")
       await recordEvent(db, "answered_alone", person.id);
     else await recordEvent(db, "other_reply", person.id);
@@ -107,13 +111,20 @@ async function runTurn(deps: TurnDeps, person: Person, history: PastMessage[], t
       if (!input.success) {
         result(`Datos inválidos: ${input.error.message}`, true);
       } else if (tool.name === REPLY_TOOL) {
-        reply = input.data as z.infer<typeof replyInput>;
+        // A reply written next to other calls was written before their results existed, and
+        // may claim something that did not happen. It is sent only when it comes alone.
+        if (calls.length === 1) reply = input.data as z.infer<typeof replyInput>;
+        else result("No se envió: revisa primero el resultado de las otras herramientas y vuelve a llamar a responder.", true);
       } else {
         try {
           result(await tool.run(input.data, { db, person }));
           if (tool.name === "subir_pregunta") escalated = true;
         } catch (error) {
-          result(error instanceof Error ? error.message : String(error), true);
+          // A refusal is for the model to read. Anything else is a fault: logged, and not shown.
+          if (!(error instanceof Refused)) {
+            await recordEvent(db, "error", person.id, { tool: tool.name, message: error instanceof Error ? error.message : String(error) });
+          }
+          result(error instanceof Refused ? error.message : "La herramienta falló por un problema interno.", true);
         }
       }
     }

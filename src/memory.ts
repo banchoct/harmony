@@ -21,17 +21,15 @@ export interface HouseView {
   notes: Note[];
 }
 
-export async function saveNote(
-  db: Db,
-  input: {
-    body: string;
-    health?: boolean;
-    audience: Audience;
-    viewers?: string[];
-    about?: string[];
-    taughtBy: string;
-  },
-): Promise<string> {
+export interface NoteInput {
+  body: string;
+  health?: boolean;
+  audience: Audience;
+  viewers?: string[];
+  about?: string[];
+}
+
+export async function saveNote(db: Db, input: NoteInput & { taughtBy: string }): Promise<string> {
   const health = input.health ?? false;
   if (health && input.audience !== "restricted") throw new Error("HEALTH_NOTE_MUST_BE_RESTRICTED");
   const links = [
@@ -63,17 +61,34 @@ const linked = (role: string) =>
 export async function houseViewFor(db: Db, person: Person): Promise<HouseView> {
   const seesAll = person.kind === "coordinator";
   const people = await db.query<Person>(
-    `SELECT id, name, kind, ${seesAll ? "phone" : "NULL AS phone"} FROM people ORDER BY created_at, name`,
+    `SELECT id, name, kind, ${seesAll ? "phone" : "NULL AS phone"} FROM people WHERE active ORDER BY created_at, name`,
   );
   const notes = await db.query<Note>(
     `SELECT id, body, health, audience, ${linked("about")} AS about, ${linked("viewer")} AS viewers
      FROM notes
-     WHERE $1 OR audience = 'all' OR EXISTS (
+     WHERE retired_at IS NULL AND ($1 OR audience = 'all' OR EXISTS (
        SELECT 1 FROM note_people
        WHERE note_id = notes.id AND person_id = $2 AND role = 'viewer'
-     )
+     ))
      ORDER BY created_at, id`,
     [seesAll, person.id],
   );
   return { people, notes };
+}
+
+/** A note still in use, whoever may see it. For the code that changes notes, not for views. */
+export async function findNote(db: Db, id: string): Promise<{ body: string; health: boolean } | null> {
+  const rows = await db.query<{ body: string; health: boolean }>(
+    "SELECT body, health FROM notes WHERE id = $1 AND retired_at IS NULL",
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
+export async function correctNote(db: Db, id: string, body: string): Promise<void> {
+  await db.query("UPDATE notes SET body = $2 WHERE id = $1", [id, body]);
+}
+
+export async function retireNote(db: Db, id: string): Promise<void> {
+  await db.query("UPDATE notes SET retired_at = now() WHERE id = $1", [id]);
 }
