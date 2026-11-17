@@ -16,7 +16,10 @@ export function call(name: string, input: Record<string, unknown>): Anthropic.Co
 }
 
 /** The usual end of a turn: the `responder` tool with the message for the person. */
-export function reply(mensaje: string, tipo: "respuesta_a_pregunta" | "otro" = "respuesta_a_pregunta") {
+export function reply(
+  mensaje: string,
+  tipo: "respuesta_a_pregunta" | "pregunta_de_aclaracion" | "otro" = "respuesta_a_pregunta",
+) {
   return call("responder", { mensaje, tipo });
 }
 
