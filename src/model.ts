@@ -9,7 +9,8 @@ export interface ModelRequest {
 
 export interface ModelResponse {
   content: Anthropic.ContentBlock[];
-  usage: { inputTokens: number; outputTokens: number };
+  /** inputTokens excludes what was read from or written to the cache. */
+  usage: { inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number };
 }
 
 /** The model behind Harmony. The real one calls the Anthropic API; tests use a scripted one. */

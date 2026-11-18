@@ -29,7 +29,9 @@ export function createAnthropicModel(client: Anthropic = new Anthropic()): Model
         // Passed back unchanged on the next step of the turn, thinking blocks included.
         content: response.content as unknown as Anthropic.ContentBlock[],
         usage: {
-          inputTokens: usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
+          inputTokens: usage.input_tokens,
+          cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+          cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
           outputTokens: usage.output_tokens,
         },
       };

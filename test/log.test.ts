@@ -66,11 +66,15 @@ test("the log counts what Harmony answered alone, what it passed up and what it 
     errors: 0,
     unclassifiedReplies: 0,
     inputTokens: 1300,
+    cacheReadTokens: 2600,
+    cacheWriteTokens: 0,
     outputTokens: 130,
+    costUsd: 0.0083,
   });
   const text = formatSummary(summary);
   assert.match(text, /Contestó sola: 1/);
   assert.match(text, /Subió a quien lleva la casa: 2/);
+  assert.match(text, /Costo: \$0\.01 USD/);
   await db.close();
 });
 

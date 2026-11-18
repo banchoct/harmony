@@ -38,7 +38,7 @@ export function scriptedModel(...steps: Step[]): ScriptedModel {
       const step = steps.shift();
       if (!step) throw new Error("SCRIPT_ENDED");
       const content = typeof step === "function" ? step(request) : step;
-      return { content, usage: { inputTokens: 100, outputTokens: 10 } };
+      return { content, usage: { inputTokens: 100, cacheReadTokens: 200, cacheWriteTokens: 0, outputTokens: 10 } };
     },
   };
 }

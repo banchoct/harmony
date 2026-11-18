@@ -70,7 +70,9 @@ function renderHouse(person: Person, view: HouseView, open: OpenItems | null): s
 export function buildSystem(person: Person, view: HouseView, open: OpenItems | null): Anthropic.TextBlockParam[] {
   return [
     { type: "text", text: `${BASE}\n\n${BY_KIND[person.kind]}`, cache_control: { type: "ephemeral" } },
-    { type: "text", text: renderHouse(person, view, open) },
+    // Read back from the cache on the later steps of a turn, and on this person's next turns
+    // while the house has not changed.
+    { type: "text", text: renderHouse(person, view, open), cache_control: { type: "ephemeral" } },
   ];
 }
 
