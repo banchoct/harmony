@@ -1,10 +1,12 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createFakeChannel } from "../src/channels/fake.js";
 import { createHarmony } from "../src/app.js";
 import { eventKinds } from "../src/log.js";
 import { houseViewFor } from "../src/memory.js";
-import { call, idShown, reply, scriptedModel, shownTo, type ScriptedModel } from "./support/scripted-model.js";
+import { failOnStepErrors, call, idShown, reply, scriptedModel, shownTo, type ScriptedModel } from "./support/scripted-model.js";
+
+failOnStepErrors(afterEach);
 import { houseWithNotes, PHONES } from "./support/house.js";
 
 async function setup(model: ScriptedModel) {

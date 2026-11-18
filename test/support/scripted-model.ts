@@ -7,6 +7,20 @@ type Step =
 
 let sequence = 0;
 
+/**
+ * Errors raised inside scripted steps, usually assertions. Each test file checks this after
+ * every test (see `failOnStepErrors`), because the turn recovers from a model failure.
+ */
+const stepFailures: unknown[] = [];
+
+/** Call once per test file: makes a test fail when a scripted step raised an error in it. */
+export function failOnStepErrors(afterEach: (fn: () => void) => void): void {
+  afterEach(() => {
+    const [first] = stepFailures.splice(0);
+    if (first) throw first;
+  });
+}
+
 /** A text block, as the model would write outside any tool. */
 export function text(value: string): Anthropic.ContentBlock {
   return { type: "text", text: value, citations: null } as Anthropic.ContentBlock;
@@ -39,7 +53,16 @@ export function scriptedModel(...steps: Step[]): ScriptedModel {
       requests.push(structuredClone(request));
       const step = steps.shift();
       if (!step) throw new Error("SCRIPT_ENDED");
-      const content = typeof step === "function" ? await step(request) : step;
+      let content: Anthropic.ContentBlock[];
+      try {
+        content = typeof step === "function" ? await step(request) : step;
+      } catch (error) {
+        // The code under test treats a model failure as something to recover from, which
+        // would hide an assertion made inside a step. Raising it again outside the turn
+        // makes the test that is running fail.
+        stepFailures.push(error);
+        throw error;
+      }
       return { content, usage: { inputTokens: 100, cacheReadTokens: 200, cacheWriteTokens: 0, outputTokens: 10 } };
     },
   };

@@ -1,9 +1,11 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createFakeChannel } from "../src/channels/fake.js";
 import { createHarmony } from "../src/app.js";
 import { formatSummary, logSummary } from "../src/log.js";
-import { call, idShown, reply, scriptedModel } from "./support/scripted-model.js";
+import { failOnStepErrors, call, idShown, reply, scriptedModel } from "./support/scripted-model.js";
+
+failOnStepErrors(afterEach);
 import { houseWithNotes, PHONES } from "./support/house.js";
 
 const ok = reply("Listo.", "otro");

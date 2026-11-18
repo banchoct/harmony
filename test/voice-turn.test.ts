@@ -1,10 +1,12 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createFakeChannel } from "../src/channels/fake.js";
 import { createHarmony } from "../src/app.js";
 import { eventKinds } from "../src/log.js";
 import type { Transcriber } from "../src/voice.js";
-import { reply, scriptedModel, shownTo, type ScriptedModel } from "./support/scripted-model.js";
+import { failOnStepErrors, reply, scriptedModel, shownTo, type ScriptedModel } from "./support/scripted-model.js";
+
+failOnStepErrors(afterEach);
 import { houseWithNotes, PHONES } from "./support/house.js";
 
 const ROSA = "+525500000002";

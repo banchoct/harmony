@@ -1,11 +1,11 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { Db } from "./db.js";
-import { Refused, requireId, resolve, submit } from "./actions.js";
+import { Refused, resolve, submit } from "./actions.js";
 import { enqueue } from "./delivery.js";
 import { recordEvent } from "./log.js";
 import type { NoteInput } from "./memory.js";
-import { addPerson, type Person } from "./people.js";
+import type { Person } from "./people.js";
 
 export interface ToolContext {
   db: Db;
@@ -166,7 +166,9 @@ const KIND_BY_LABEL = { lleva_la_casa: "coordinator", personal: "staff", miembro
 
 const registrarPersona = tool({
   name: "registrar_persona",
-  description: "Da de alta a una persona de la casa. Con teléfono podrá escribirle a Harmony; sin teléfono solo se sabe de ella.",
+  description:
+    "Da de alta a una persona de la casa. Con teléfono podrá escribirle a Harmony; sin teléfono solo se sabe de ella. " +
+    "Dar de alta a alguien que lleva la casa no se hace directo: queda como propuesta hasta que confirme.",
   input: z.object({
     nombre: z.string(),
     tipo: z
@@ -174,35 +176,15 @@ const registrarPersona = tool({
       .describe("lleva_la_casa: tiene autoridad sobre la memoria. personal: trabaja en la casa. miembro: familia."),
     telefono: z.string().nullable().describe("Con clave de país, o null si no tiene o no se sabe."),
   }),
-  async run({ nombre, tipo, telefono }, { db, person }) {
-    try {
-      const added = await addPerson(db, { name: nombre, kind: KIND_BY_LABEL[tipo], phone: telefono ?? undefined });
-      await recordEvent(db, "person_registered", person.id, { person_id: added.id });
-      return `${added.name} quedó registrada con el identificador ${added.id}.`;
-    } catch (error) {
-      const code = error instanceof Error ? error.message : "";
-      if (code === "PHONE_INVALID") throw new Refused("Ese teléfono no es válido. Pídelo con clave de país.");
-      if (code === "PHONE_TAKEN") throw new Refused("Ese teléfono ya es de otra persona de la casa.");
-      throw error;
-    }
-  },
+  run: ({ nombre, tipo, telefono }, { db, person }) =>
+    submit(db, person, { type: "register_person", name: nombre, kind: KIND_BY_LABEL[tipo], phone: telefono }),
 });
 
 const darDeBajaPersona = tool({
   name: "dar_de_baja_persona",
   description: "Da de baja a una persona que ya no es de la casa. Deja de poder escribirle a Harmony.",
   input: z.object({ persona: z.string().describe("Identificador de la persona.") }),
-  async run({ persona }, { db, person }) {
-    requireId(persona, "una persona");
-    if (persona === person.id) throw new Refused("No puedes darte de baja a ti misma.");
-    const [left] = await db.query<{ name: string }>(
-      "UPDATE people SET active = false WHERE id = $1 AND active RETURNING name",
-      [persona],
-    );
-    if (!left) throw new Refused("Esa persona no existe en la casa.");
-    await recordEvent(db, "person_removed", person.id, { person_id: persona });
-    return `${left.name} quedó dada de baja.`;
-  },
+  run: ({ persona }, { db, person }) => submit(db, person, { type: "remove_person", personId: persona }),
 });
 
 /** The tools the code offers for a turn. Authority lives here: what is not listed cannot run. */

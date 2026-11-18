@@ -2,14 +2,16 @@ import type { Db } from "./db.js";
 import { enqueue } from "./delivery.js";
 import { recordEvent } from "./log.js";
 import { correctNote, findNote, retireNote, saveNote, type NoteInput } from "./memory.js";
-import type { Person } from "./people.js";
+import { addPerson, type Person, type PersonKind } from "./people.js";
 
 /** A change to the memory asked for by whoever runs the home. */
 export type Action =
   | { type: "save_note"; note: NoteInput }
   | { type: "correct_note"; noteId: string; body: string }
   | { type: "retire_note"; noteId: string }
-  | { type: "answer_question"; questionId: string; message: string; note: NoteInput };
+  | { type: "answer_question"; questionId: string; message: string; note: NoteInput }
+  | { type: "register_person"; name: string; kind: PersonKind; phone: string | null }
+  | { type: "remove_person"; personId: string };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -37,21 +39,22 @@ async function existingNote(db: Db, id: string): Promise<{ body: string; health:
 }
 
 /**
- * Checks the action can be done and says whether it touches health, in which case it must wait
- * for a yes (autonomy level 3). `summary` is what whoever runs the home is asked to confirm.
+ * Checks the action can be done and says whether it must wait for a yes: anything touching
+ * health (autonomy level 3) and anything that gives or takes away authority over the house.
+ * `summary` is what whoever runs the home is asked to confirm.
  */
-async function inspect(db: Db, action: Action): Promise<{ health: boolean; summary: string }> {
+async function inspect(db: Db, by: Person, action: Action): Promise<{ confirm: boolean; summary: string }> {
   switch (action.type) {
     case "save_note":
       await checkNote(db, action.note);
-      return { health: action.note.health ?? false, summary: `Guardar nota de salud: «${action.note.body}»` };
+      return { confirm: action.note.health ?? false, summary: `Guardar nota de salud: «${action.note.body}»` };
     case "correct_note": {
       const note = await existingNote(db, action.noteId);
-      return { health: note.health, summary: `Corregir la nota de salud «${note.body}» por: «${action.body}»` };
+      return { confirm: note.health, summary: `Corregir la nota de salud «${note.body}» por: «${action.body}»` };
     }
     case "retire_note": {
       const note = await existingNote(db, action.noteId);
-      return { health: note.health, summary: `Retirar la nota de salud: «${note.body}»` };
+      return { confirm: note.health, summary: `Retirar la nota de salud: «${note.body}»` };
     }
     case "answer_question": {
       requireId(action.questionId, "una pregunta pendiente");
@@ -61,9 +64,24 @@ async function inspect(db: Db, action: Action): Promise<{ health: boolean; summa
       if (open.length === 0) throw new Refused("Esa pregunta no existe o ya fue contestada.");
       await checkNote(db, action.note);
       return {
-        health: action.note.health ?? false,
+        confirm: action.note.health ?? false,
         summary: `Contestar una pregunta pendiente y guardar la nota de salud: «${action.note.body}»`,
       };
+    }
+    case "register_person":
+      return {
+        confirm: action.kind === "coordinator",
+        summary: `Dar autoridad sobre la casa a ${action.name}${action.phone ? `, teléfono ${action.phone}` : ""}`,
+      };
+    case "remove_person": {
+      requireId(action.personId, "una persona");
+      if (action.personId === by.id) throw new Refused("No puedes darte de baja a ti misma.");
+      const [person] = await db.query<{ name: string; kind: PersonKind }>(
+        "SELECT name, kind FROM people WHERE id = $1 AND active",
+        [action.personId],
+      );
+      if (!person) throw new Refused("Esa persona no existe en la casa.");
+      return { confirm: person.kind === "coordinator", summary: `Dar de baja a ${person.name}, que lleva la casa` };
     }
   }
 }
@@ -96,20 +114,42 @@ async function apply(db: Db, by: Person, action: Action): Promise<string> {
       await recordEvent(db, "question_answered", by.id, { question_id: action.questionId, note_id: noteId });
       return "Respuesta enviada a quien preguntó y guardada en la memoria.";
     }
+    case "register_person": {
+      let added: Person;
+      try {
+        added = await addPerson(db, { name: action.name, kind: action.kind, phone: action.phone ?? undefined });
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "";
+        if (code === "PHONE_INVALID") throw new Refused("Ese teléfono no es válido. Pídelo con clave de país.");
+        if (code === "PHONE_TAKEN") throw new Refused("Ese teléfono ya es de otra persona de la casa.");
+        throw error;
+      }
+      await recordEvent(db, "person_registered", by.id, { person_id: added.id });
+      return `${added.name} quedó en la casa con el identificador ${added.id}.`;
+    }
+    case "remove_person": {
+      const [left] = await db.query<{ name: string }>(
+        "UPDATE people SET active = false WHERE id = $1 AND active RETURNING name",
+        [action.personId],
+      );
+      if (!left) throw new Refused("Esa persona no existe en la casa.");
+      await recordEvent(db, "person_removed", by.id, { person_id: action.personId });
+      return `${left.name} ya no es parte de la casa.`;
+    }
   }
 }
 
-/** Does the action now, or holds it as a proposal when it touches health. */
+/** Does the action now, or holds it as a proposal when it must wait for a yes. */
 export async function submit(db: Db, by: Person, action: Action): Promise<string> {
-  const { health, summary } = await inspect(db, action);
-  if (!health) return apply(db, by, action);
+  const { confirm, summary } = await inspect(db, by, action);
+  if (!confirm) return apply(db, by, action);
   const [proposal] = await db.query<{ id: string }>(
     "INSERT INTO proposals (requested_by, action, summary) VALUES ($1, $2, $3) RETURNING id",
     [by.id, JSON.stringify(action), summary],
   );
   await recordEvent(db, "confirmation_requested", by.id, { proposal_id: proposal!.id });
   return (
-    `Es un cambio de salud: no se guardó, quedó como propuesta ${proposal!.id}. ` +
+    `Este cambio necesita confirmación: no se hizo, quedó como propuesta ${proposal!.id}. ` +
     `Dile a ${by.name} en una línea qué entendiste y pídele que confirme con un sí.`
   );
 }
@@ -117,18 +157,27 @@ export async function submit(db: Db, by: Person, action: Action): Promise<string
 /** Resolves a proposal with the yes or no of whoever runs the home. */
 export async function resolve(db: Db, by: Person, proposalId: string, confirmed: boolean): Promise<string> {
   requireId(proposalId, "una propuesta");
+  // The yes has to come in a message written after the proposal was made. Otherwise the model
+  // could propose and confirm by itself within one turn, and the wait would mean nothing.
   const [proposal] = await db.query<{ action: Action }>(
     `UPDATE proposals SET resolved_at = now(), outcome = $2
-     WHERE id = $1 AND resolved_at IS NULL RETURNING action`,
-    [proposalId, confirmed ? "confirmed" : "rejected"],
+     WHERE id = $1 AND resolved_at IS NULL AND EXISTS (
+       SELECT 1 FROM messages
+       WHERE person_id = $3 AND direction = 'in' AND messages.created_at > proposals.created_at
+     ) RETURNING action`,
+    [proposalId, confirmed ? "confirmed" : "rejected", by.id],
   );
-  if (!proposal) throw new Refused("Esa propuesta no existe o ya se resolvió.");
+  if (!proposal) {
+    throw new Refused(
+      "Esa propuesta no existe, ya se resolvió, o todavía no hay un mensaje de quien lleva la casa posterior a ella.",
+    );
+  }
   await recordEvent(db, "confirmation_resolved", by.id, {
     proposal_id: proposalId,
     outcome: confirmed ? "confirmed" : "rejected",
   });
   if (!confirmed) return "Propuesta descartada. No se guardó nada.";
-  await inspect(db, proposal.action);
+  await inspect(db, by, proposal.action);
   return apply(db, by, proposal.action);
 }
 
