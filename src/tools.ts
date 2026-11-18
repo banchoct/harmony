@@ -57,7 +57,12 @@ const subirPregunta = tool({
     "Pasa a quien lleva la casa una pregunta que la memoria de la casa no contesta. " +
     "Úsala en vez de suponer. Después avisa a la persona que ya preguntaste y que le avisarás.",
   input: z.object({
-    pregunta: z.string().describe("La pregunta, completa y clara para quien no vio la conversación."),
+    pregunta: z
+      .string()
+      .describe(
+        "Solo la pregunta, completa y clara para quien no vio la conversación. " +
+          "Sin el nombre de quien pregunta (se agrega solo) y sin comentarios sobre lo que hay o no en la memoria.",
+      ),
   }),
   async run({ pregunta }, { db, person }) {
     const coordinators = await db.query<{ id: string; name: string }>(
