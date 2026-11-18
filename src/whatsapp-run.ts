@@ -7,13 +7,18 @@ import { openDb } from "./db.js";
 import { deliverPending } from "./delivery.js";
 import { createOpenAITranscriber } from "./voice.js";
 import { createBaileysChannel, installSignalLogFilter } from "./whatsapp/baileys.js";
+import { whatsAppView } from "./whatsapp/link.js";
 
 /**
  * Harmony on WhatsApp, on the dedicated number. `npm run whatsapp`.
- * The first run prints a QR to scan with the WhatsApp of that number. Linking it here
- * disconnects any other Harmony linked to the same number.
- * The house is the one saved in ./data/harmony; the WhatsApp login keys live in
- * ./data/whatsapp-session. Both stay out of git.
+ * Settings come from the environment (on Railway) or from ~/.harmony.env:
+ *   ANTHROPIC_API_KEY        required
+ *   DATABASE_URL             the memory (Supabase). Without it, a database in ./data/harmony
+ *   OPENAI_API_KEY           voice notes. Without it Harmony asks people to write
+ *   WHATSAPP_SESSION_DIR     where the WhatsApp login keys live. Default ./data/whatsapp-session
+ *   WHATSAPP_PAIRING_PHONE   the dedicated number. With it, linking is by an eight-character
+ *                            code printed here; without it, by a QR printed here
+ * Linking the number here disconnects any other Harmony linked to it. Nothing here is in git.
  */
 
 const KEY_FILE = join(homedir(), ".harmony.env");
@@ -23,12 +28,12 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
-const db = await openDb("./data/harmony");
+const db = await openDb(process.env.DATABASE_URL?.trim() || "./data/harmony");
 const [{ people } = { people: 0 }] = await db.query<{ people: number }>(
   "SELECT count(*)::int AS people FROM people WHERE kind = 'coordinator' AND active",
 );
 if (people === 0) {
-  console.error('La casa está vacía. Primero: npm run consola -- --alta "Nombre" +5215500000001');
+  console.error('La casa está vacía. Primero: npm run alta -- "Nombre" +5215500000001');
   process.exit(1);
 }
 
@@ -36,7 +41,9 @@ const openaiKey = process.env.OPENAI_API_KEY?.trim();
 if (!openaiKey) console.log("Sin OPENAI_API_KEY: Harmony pedirá que le escriban en vez de notas de voz.");
 
 installSignalLogFilter();
-const channel = createBaileysChannel({ sessionDir: "./data/whatsapp-session" });
+const channel = createBaileysChannel({
+  sessionDir: process.env.WHATSAPP_SESSION_DIR?.trim() || "./data/whatsapp-session",
+});
 createHarmony({
   db,
   channel,
@@ -47,8 +54,26 @@ createHarmony({
 // A message that could not be sent is tried again here, not only when someone next writes.
 const retry = setInterval(() => void deliverPending(db, channel).catch(() => undefined), 30_000);
 
+// Linking by code: WhatsApp > Dispositivos vinculados > Vincular con el número de teléfono.
+const pairingPhone = process.env.WHATSAPP_PAIRING_PHONE?.trim();
+let codesAsked = 0;
+const pairing = setInterval(() => {
+  const view = whatsAppView(channel.whatsapp.status());
+  if (view === "connected" || !pairingPhone || codesAsked >= 5) {
+    if (view === "connected" || codesAsked >= 5) clearInterval(pairing);
+    return;
+  }
+  if (view !== "qr") return;
+  codesAsked += 1;
+  void channel.whatsapp.requestPairing(pairingPhone).then((result) => {
+    if (result.ok) console.log(`Código para vincular WhatsApp (vale un minuto): ${result.code}`);
+    else console.log(`No se pudo pedir el código de vinculación: ${result.error}`);
+  });
+}, 3000);
+
 const stop = async () => {
   clearInterval(retry);
+  clearInterval(pairing);
   await channel.stop();
   await db.close();
   process.exit(0);

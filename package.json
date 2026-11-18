@@ -11,22 +11,26 @@
     "test": "node --import tsx --test --test-force-exit \"test/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "check": "npm run typecheck && npm test",
-    "prepare": "git config core.hooksPath .githooks",
+    "prepare": "git config core.hooksPath .githooks || true",
     "consola": "node --import tsx src/console.ts",
-    "whatsapp": "node --import tsx src/whatsapp-run.ts"
+    "whatsapp": "node --import tsx src/whatsapp-run.ts",
+    "test:postgres": "HARMONY_TEST_DB=postgres node --import tsx --test --test-force-exit --test-concurrency=1 \"test/*.test.ts\"",
+    "alta": "node --import tsx src/alta.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.10.0",
     "@electric-sql/pglite": "0.5.16",
     "@whiskeysockets/baileys": "6.7.24",
     "pino": "9.14.0",
+    "postgres": "3.4.7",
     "qrcode": "1.5.4",
-    "zod": "4.6.7"
+    "zod": "4.6.7",
+    "tsx": "4.23.15"
   },
   "devDependencies": {
+    "@electric-sql/pglite-socket": "0.2.19",
     "@types/node": "22.20.5",
     "@types/qrcode": "1.5.6",
-    "tsx": "4.23.15",
     "typescript": "7.0.2"
   }
 }

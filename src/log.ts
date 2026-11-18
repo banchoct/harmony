@@ -7,7 +7,8 @@ export async function recordEvent(
   personId: string | null,
   data: Record<string, unknown> = {},
 ): Promise<void> {
-  await db.query("INSERT INTO events (kind, person_id, data) VALUES ($1, $2, $3)", [
+  await db.query(// Sent as text and cast, so every driver stores the object and not a quoted string.
+    "INSERT INTO events (kind, person_id, data) VALUES ($1, $2, $3::text::jsonb)", [
     kind,
     personId,
     JSON.stringify(data),

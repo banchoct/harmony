@@ -144,7 +144,7 @@ export async function submit(db: Db, by: Person, action: Action): Promise<string
   const { confirm, summary } = await inspect(db, by, action);
   if (!confirm) return apply(db, by, action);
   const [proposal] = await db.query<{ id: string }>(
-    "INSERT INTO proposals (requested_by, action, summary) VALUES ($1, $2, $3) RETURNING id",
+    "INSERT INTO proposals (requested_by, action, summary) VALUES ($1, $2::text::jsonb, $3) RETURNING id",
     [by.id, JSON.stringify(action), summary],
   );
   await recordEvent(db, "confirmation_requested", by.id, { proposal_id: proposal!.id });

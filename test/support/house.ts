@@ -17,8 +17,22 @@ export interface InventedHouse {
 }
 
 /** An invented house: Ana runs it, Rosa and Beto work in it, Leo is a child. No real data. */
+/**
+ * With HARMONY_TEST_DB=postgres every test house lives behind a Postgres wire server and is
+ * reached with the production driver, so the whole suite also checks that driver.
+ */
+async function openTestDb(): Promise<Db> {
+  if (process.env.HARMONY_TEST_DB !== "postgres") return openDb();
+  const { PGlite } = await import("@electric-sql/pglite");
+  const { PGLiteSocketServer } = await import("@electric-sql/pglite-socket");
+  const port = 20000 + Math.floor(Math.random() * 20000);
+  const server = new PGLiteSocketServer({ db: new PGlite(), port, host: "127.0.0.1", maxConnections: 5 });
+  await server.start();
+  return openDb(`postgres://postgres:postgres@127.0.0.1:${port}/postgres`);
+}
+
 export async function inventedHouse(): Promise<InventedHouse> {
-  const db = await openDb();
+  const db = await openTestDb();
   const ana = await addPerson(db, { name: "Ana", kind: "coordinator", phone: PHONES.ana });
   const rosa = await addPerson(db, { name: "Rosa", kind: "staff", phone: PHONES.rosa });
   const beto = await addPerson(db, { name: "Beto", kind: "staff", phone: PHONES.beto });
