@@ -59,8 +59,8 @@ const pairingPhone = process.env.WHATSAPP_PAIRING_PHONE?.trim();
 let codesAsked = 0;
 const pairing = setInterval(() => {
   const view = whatsAppView(channel.whatsapp.status());
-  if (view === "connected" || !pairingPhone || codesAsked >= 5) {
-    if (view === "connected" || codesAsked >= 5) clearInterval(pairing);
+  if (view === "connected" || !pairingPhone || codesAsked >= 10) {
+    if (view === "connected" || codesAsked >= 10) clearInterval(pairing);
     return;
   }
   if (view !== "qr") return;
