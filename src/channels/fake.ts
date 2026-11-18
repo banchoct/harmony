@@ -1,8 +1,8 @@
-import type { Channel, MessageHandler } from "../channel.js";
+import type { Channel, InboundMessage, MessageHandler } from "../channel.js";
 
 export interface FakeChannel extends Channel {
   /** Delivers a message as if it had arrived from that phone. */
-  receive(fromPhone: string, text: string): Promise<void>;
+  receive(fromPhone: string, text: string, extra?: Partial<InboundMessage>): Promise<void>;
   sent: Array<{ toPhone: string; text: string; id: string }>;
 }
 
@@ -22,13 +22,14 @@ export function createFakeChannel(): FakeChannel {
     },
     async start() {},
     async stop() {},
-    async receive(fromPhone, text) {
+    async receive(fromPhone, text, extra) {
       if (!handler) throw new Error("NO_HANDLER");
       await handler({
         id: `fake-in-${++sequence}`,
         fromPhone,
         text,
         receivedAt: new Date().toISOString(),
+        ...extra,
       });
     },
   };

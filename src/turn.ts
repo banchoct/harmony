@@ -9,12 +9,15 @@ import { houseViewFor } from "./memory.js";
 import type { Model } from "./model.js";
 import { findPersonByPhone, type Person } from "./people.js";
 import { buildSystem, buildUserMessage, type PastMessage } from "./prompt.js";
+import { usableTranscript, type Transcriber } from "./voice.js";
 import { REPLY_TOOL, type replyInput, toolDefinition, toolsFor } from "./tools.js";
 
 export interface TurnDeps {
   db: Db;
   channel: Channel;
   model: Model;
+  /** Turns voice notes into text. Without one, Harmony asks the person to write. */
+  transcriber?: Transcriber;
   now?: () => Date;
   timeZone?: string;
 }
@@ -23,33 +26,82 @@ const MAX_MODEL_STEPS = 5;
 const HISTORY_MESSAGES = 20;
 const FAILURE_REPLY = "Perdón, tuve un problema y no pude contestar tu mensaje. Intenta de nuevo en un momento.";
 
+const CANNED = {
+  noTranscriber: "Todavía no puedo escuchar notas de voz. ¿Me lo escribes, por favor?",
+  notUnderstood: "Perdón, no pude entender tu nota de voz. ¿Me la repites o me lo escribes?",
+  tooLarge: "Tu nota de voz es muy larga para mí. ¿Me la mandas en partes más cortas o me lo escribes?",
+  notDownloaded: "Perdón, no pude descargar tu nota de voz. ¿Me la mandas otra vez?",
+  file: "Todavía no puedo leer archivos ni fotos. ¿Me escribes lo que necesitas?",
+};
+const FILE_NOTE = "(El mensaje venía con un archivo o una foto. Harmony todavía no puede leer archivos.)";
+
+/** What a voice note said, or the canned reply for why it could not be used. */
+async function hear(deps: TurnDeps, inbound: InboundMessage): Promise<{ text: string } | { reply: string }> {
+  if (inbound.audioTooLarge) return { reply: CANNED.tooLarge };
+  if (!inbound.audio) return { reply: CANNED.notDownloaded };
+  if (!deps.transcriber) return { reply: CANNED.noTranscriber };
+  try {
+    const text = usableTranscript(await deps.transcriber.transcribe(inbound.audio));
+    return text ? { text } : { reply: CANNED.notUnderstood };
+  } catch {
+    return { reply: CANNED.notUnderstood };
+  }
+}
+
 /** One inbound message, start to finish: who it is, what they may see, the model, the reply. */
 export async function handleMessage(deps: TurnDeps, inbound: InboundMessage): Promise<void> {
   const { db } = deps;
   const person = await findPersonByPhone(db, inbound.fromPhone);
   if (!person) {
-    // Nothing is said to a number the house does not know, and nothing reaches the model.
+    // Nothing is said to a number the house does not know, and nothing of theirs reaches the
+    // model or the transcriber.
     await recordEvent(db, "unknown_sender", null, { phone_ending: inbound.fromPhone.slice(-4) });
     return;
   }
+  let text = inbound.text.trim();
+  let canned: string | null = null;
+  const voice = inbound.audio || inbound.audioFailed || inbound.audioTooLarge;
+  if (!text && voice) {
+    const heard = await hear(deps, inbound);
+    // The log keeps the length and whether it was understood, never the words.
+    await recordEvent(db, "voice_note", person.id, {
+      seconds: inbound.audio?.seconds ?? inbound.audioSeconds ?? null,
+      transcribed: "text" in heard,
+    });
+    if ("text" in heard) text = heard.text;
+    else canned = heard.reply;
+  } else if (!text && inbound.attachment) {
+    canned = CANNED.file;
+  } else if (!text) {
+    await recordEvent(db, "empty_message", person.id);
+    return;
+  } else if (inbound.attachment) {
+    text = `${text}\n\n${FILE_NOTE}`;
+  }
+
   const history = await recentMessages(db, person);
   await db.query("INSERT INTO messages (person_id, direction, body, sent_at) VALUES ($1, 'in', $2, now())", [
     person.id,
-    inbound.text,
+    text || (voice ? "(nota de voz que no se pudo usar)" : "(archivo sin texto)"),
   ]);
   await recordEvent(db, "message_in", person.id);
-  try {
-    await runTurn(deps, person, history, inbound.text);
-  } catch (error) {
-    await recordEvent(db, "error", person.id, { message: error instanceof Error ? error.message : String(error) });
-    await enqueue(db, person.id, FAILURE_REPLY);
+  if (canned) {
+    await enqueue(db, person.id, canned);
+  } else {
+    try {
+      await runTurn(deps, person, history, text);
+    } catch (error) {
+      await recordEvent(db, "error", person.id, { message: error instanceof Error ? error.message : String(error) });
+      await enqueue(db, person.id, FAILURE_REPLY);
+    }
   }
   await deliverPending(db, deps.channel);
 }
 
 async function recentMessages(db: Db, person: Person): Promise<PastMessage[]> {
   const rows = await db.query<PastMessage>(
-    "SELECT direction, body FROM messages WHERE person_id = $1 ORDER BY seq DESC LIMIT $2",
+    // Only what the person actually wrote or received.
+    "SELECT direction, body FROM messages WHERE person_id = $1 AND sent_at IS NOT NULL ORDER BY seq DESC LIMIT $2",
     [person.id, HISTORY_MESSAGES],
   );
   return rows.reverse();

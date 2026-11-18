@@ -1,7 +1,9 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Model, ModelRequest } from "../../src/model.js";
 
-type Step = Anthropic.ContentBlock[] | ((request: ModelRequest) => Anthropic.ContentBlock[]);
+type Step =
+  | Anthropic.ContentBlock[]
+  | ((request: ModelRequest) => Anthropic.ContentBlock[] | Promise<Anthropic.ContentBlock[]>);
 
 let sequence = 0;
 
@@ -37,7 +39,7 @@ export function scriptedModel(...steps: Step[]): ScriptedModel {
       requests.push(structuredClone(request));
       const step = steps.shift();
       if (!step) throw new Error("SCRIPT_ENDED");
-      const content = typeof step === "function" ? step(request) : step;
+      const content = typeof step === "function" ? await step(request) : step;
       return { content, usage: { inputTokens: 100, cacheReadTokens: 200, cacheWriteTokens: 0, outputTokens: 10 } };
     },
   };

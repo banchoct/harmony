@@ -12,15 +12,20 @@
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "check": "npm run typecheck && npm test",
     "prepare": "git config core.hooksPath .githooks",
-    "consola": "node --import tsx src/console.ts"
+    "consola": "node --import tsx src/console.ts",
+    "whatsapp": "node --import tsx src/whatsapp-run.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.10.0",
     "@electric-sql/pglite": "0.5.16",
+    "@whiskeysockets/baileys": "6.7.24",
+    "pino": "9.14.0",
+    "qrcode": "1.5.4",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
+    "@types/qrcode": "1.5.6",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
   }
