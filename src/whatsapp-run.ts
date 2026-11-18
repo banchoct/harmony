@@ -5,6 +5,7 @@ import { createAnthropicModel } from "./anthropic-model.js";
 import { createHarmony } from "./app.js";
 import { openDb } from "./db.js";
 import { deliverPending } from "./delivery.js";
+import { recordEvent } from "./log.js";
 import { createOpenAITranscriber } from "./voice.js";
 import { createBaileysChannel, installSignalLogFilter } from "./whatsapp/baileys.js";
 import { whatsAppView } from "./whatsapp/link.js";
@@ -41,6 +42,11 @@ if (!process.env.ANTHROPIC_API_KEY) {
 say(process.env.DATABASE_URL ? "Conectando a la base de datos." : "Sin DATABASE_URL: se usa la base en ./data/harmony.");
 const db = await openDb(process.env.DATABASE_URL?.trim() || "./data/harmony");
 say("Base de datos lista.");
+// The service's own steps also go to the log table, so they can be read when the host's
+// log screen shows nothing.
+const note = (kind: string, data: Record<string, unknown> = {}) =>
+  recordEvent(db, kind, null, data).catch(() => undefined);
+await note("service_started", { commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? null });
 const [{ people } = { people: 0 }] = await db.query<{ people: number }>(
   "SELECT count(*)::int AS people FROM people WHERE kind = 'coordinator' AND active",
 );
@@ -73,13 +79,20 @@ const pairing = setInterval(() => {
   const view = whatsAppView(channel.whatsapp.status());
   if (view === "connected" || !pairingPhone || codesAsked >= 10) {
     if (view === "connected" || codesAsked >= 10) clearInterval(pairing);
+    if (view === "connected") void note("whatsapp_connected");
     return;
   }
   if (view !== "qr") return;
   codesAsked += 1;
   void channel.whatsapp.requestPairing(pairingPhone).then((result) => {
-    if (result.ok) console.log(`C처digo para vincular WhatsApp (vale un minuto): ${result.code}`);
-    else console.log(`No se pudo pedir el c처digo de vinculaci처n: ${result.error}`);
+    if (result.ok) {
+      console.log(`C처digo para vincular WhatsApp (vale un minuto): ${result.code}`);
+      // Useless a minute later, so it is safe to keep in the log table.
+      void note("pairing_code", { code: result.code, attempt: codesAsked });
+    } else {
+      console.log(`No se pudo pedir el c처digo de vinculaci처n: ${result.error}`);
+      void note("pairing_failed", { error: result.error, attempt: codesAsked });
+    }
   });
 }, 3000);
 
@@ -100,4 +113,5 @@ say("WhatsApp iniciado. Esperando el c처digo o el QR de vinculaci처n, o la sesi�
 setTimeout(() => {
   const status = channel.whatsapp.status();
   say(`Estado de WhatsApp al minuto: ${whatsAppView(status)} (fase ${status.phase}).`);
+  void note("whatsapp_status", { view: whatsAppView(status), phase: status.phase });
 }, 60_000);
