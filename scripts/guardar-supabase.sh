@@ -13,8 +13,9 @@ let raw = process.env.CADENA.trim();
 const password = process.env.CLAVE.trim();
 if (!/^postgres(ql)?:\/\//.test(raw)) { console.error("Eso no parece una cadena de conexión: debe empezar con postgresql://"); process.exit(1); }
 if (!password) { console.error("Faltó la contraseña."); process.exit(1); }
-if (!raw.includes("[YOUR-PASSWORD]")) { console.error("La cadena no trae el texto [YOUR-PASSWORD]. Cópiala otra vez de Supabase, tal como aparece."); process.exit(1); }
-raw = raw.replace("[YOUR-PASSWORD]", encodeURIComponent(password));
+const placeholder = /\[YOUR-[A-Z-]*PASSWORD\]/;
+if (!placeholder.test(raw)) { console.error("La cadena no trae el texto [YOUR-DATABASE-PASSWORD]. Cópiala otra vez de Supabase, tal como aparece."); process.exit(1); }
+raw = raw.replace(placeholder, encodeURIComponent(password));
 const url = new URL(raw);
 url.searchParams.set("sslmode", "require");
 const file = path.join(os.homedir(), ".harmony.env");
