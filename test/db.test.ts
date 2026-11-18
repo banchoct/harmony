@@ -15,3 +15,15 @@ test("a database saved in a folder is created with its parent folders and keeps 
   assert.equal((await findPersonByPhone(second, "+5215500000001"))?.name, "Ana");
   await second.close();
 });
+
+test("every table is closed to Supabase's public API roles: row security is on, with no policy", async () => {
+  // Supabase serves the tables of the public schema over its web API. Row security with no
+  // policy lets only the owner in, which is the connection Harmony uses.
+  const db = await openDb();
+  const open = await db.query<{ tablename: string }>(
+    "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND NOT rowsecurity ORDER BY 1",
+  );
+  assert.deepEqual(open, []);
+  assert.deepEqual(await db.query("SELECT 1 FROM pg_policies WHERE schemaname = 'public'"), []);
+  await db.close();
+});
