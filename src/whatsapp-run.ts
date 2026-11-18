@@ -21,6 +21,16 @@ import { whatsAppView } from "./whatsapp/link.js";
  * Linking the number here disconnects any other Harmony linked to it. Nothing here is in git.
  */
 
+/** One line per step of the start, so the service log shows how far it got. */
+const say = (line: string) => console.log(`${new Date().toISOString()} ${line}`);
+const fail = (what: string, error: unknown) => {
+  console.error(`${new Date().toISOString()} ${what}: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+};
+process.on("uncaughtException", (error) => fail("Error no atrapado", error));
+process.on("unhandledRejection", (error) => fail("Promesa rechazada", error));
+say("Harmony arrancando.");
+
 const KEY_FILE = join(homedir(), ".harmony.env");
 if (existsSync(KEY_FILE)) process.loadEnvFile(KEY_FILE);
 if (!process.env.ANTHROPIC_API_KEY) {
@@ -28,7 +38,9 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
+say(process.env.DATABASE_URL ? "Conectando a la base de datos." : "Sin DATABASE_URL: se usa la base en ./data/harmony.");
 const db = await openDb(process.env.DATABASE_URL?.trim() || "./data/harmony");
+say("Base de datos lista.");
 const [{ people } = { people: 0 }] = await db.query<{ people: number }>(
   "SELECT count(*)::int AS people FROM people WHERE kind = 'coordinator' AND active",
 );
@@ -81,4 +93,11 @@ const stop = async () => {
 process.on("SIGINT", () => void stop());
 process.on("SIGTERM", () => void stop());
 
+say("Conectando a WhatsApp.");
 await channel.start();
+say("WhatsApp iniciado. Esperando el código o el QR de vinculación, o la sesión ya guardada.");
+// If nothing has happened after a minute, say in what state the link is.
+setTimeout(() => {
+  const status = channel.whatsapp.status();
+  say(`Estado de WhatsApp al minuto: ${whatsAppView(status)} (fase ${status.phase}).`);
+}, 60_000);

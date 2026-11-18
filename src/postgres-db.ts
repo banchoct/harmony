@@ -36,6 +36,8 @@ export async function openPostgres(databaseUrl: string): Promise<Db> {
   const sql = postgres(databaseUrl, {
     ssl: postgresSsl(databaseUrl),
     max: 3,
+    // Fail with an error instead of waiting in silence when the database cannot be reached.
+    connect_timeout: 15,
     // Supabase's connection pooler does not keep prepared statements between queries.
     prepare: false,
     onnotice: () => {},
