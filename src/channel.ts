@@ -22,6 +22,8 @@ export interface InboundMessage {
   audioBytes?: number | null;
   /** A file came with the message. Harmony does not read files yet. */
   attachment?: { kind: "pdf" | "foto"; name: string };
+  /** Contact cards shared in the message. `phone` is null when a card has no usable number. */
+  contacts?: Array<{ name: string; phone: string | null }>;
 }
 
 export type MessageHandler = (message: InboundMessage) => Promise<void>;

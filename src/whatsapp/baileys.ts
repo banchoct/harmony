@@ -26,6 +26,7 @@ import {
   type WhatsAppLinkPort,
 } from "./link.js";
 import { WHISPER_MAX_BYTES } from "../voice.js";
+import { contactsFromBaileysMessage } from "./contact-card.js";
 import { describeBaileysMessage, type BaileysInnerMessage } from "./baileys-message.js";
 
 interface WaKey {
@@ -674,6 +675,7 @@ export function createBaileysChannel(options: {
     }
     const phone = resolved.phone;
     const described = describeBaileysMessage(item.message);
+    const contacts = contactsFromBaileysMessage(item.message);
     let audio: { bytes: Uint8Array; mimeType: string; seconds: number | null } | undefined;
     let audioFailed = false;
     let audioTooLarge = false;
@@ -715,6 +717,7 @@ export function createBaileysChannel(options: {
         ...(audioTooLarge ? { audioTooLarge: true } : {}),
         ...(described.audio ? { audioSeconds, audioBytes } : {}),
         ...(described.attachment ? { attachment: described.attachment } : {}),
+        ...(contacts ? { contacts } : {}),
       });
     } catch {
       output.write(`No se pudo registrar el mensaje ${id}.\n`);

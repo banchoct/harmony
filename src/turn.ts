@@ -35,6 +35,15 @@ const CANNED = {
 };
 const FILE_NOTE = "(El mensaje venía con un archivo o una foto. Harmony todavía no puede leer archivos.)";
 
+/** Shared contact cards, in words for the model. The card is data: who to register is decided by tools. */
+function describeContacts(contacts: NonNullable<InboundMessage["contacts"]>): string {
+  const cards = contacts.map(
+    (card) => `${card.name || "sin nombre"}, ${card.phone ? `teléfono ${card.phone}` : "sin número que se pueda usar"}`,
+  );
+  const what = cards.length === 1 ? "una tarjeta de contacto" : `${cards.length} tarjetas de contacto`;
+  return `(Compartió ${what}: ${cards.join("; ")}.)`;
+}
+
 /** What a voice note said, or the canned reply for why it could not be used. */
 async function hear(deps: TurnDeps, inbound: InboundMessage): Promise<{ text: string } | { reply: string }> {
   if (inbound.audioTooLarge) return { reply: CANNED.tooLarge };
@@ -59,6 +68,7 @@ export async function handleMessage(deps: TurnDeps, inbound: InboundMessage): Pr
     return;
   }
   let text = inbound.text.trim();
+  if (inbound.contacts?.length) text = [text, describeContacts(inbound.contacts)].filter(Boolean).join("\n\n");
   let canned: string | null = null;
   const voice = inbound.audio || inbound.audioFailed || inbound.audioTooLarge;
   if (!text && voice) {

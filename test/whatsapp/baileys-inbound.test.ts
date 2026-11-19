@@ -463,3 +463,30 @@ function capture(): { output: Writable; text: () => string } {
   });
   return { output, text: () => body };
 }
+
+test("a shared contact card reaches the handler as a contact, not as empty text", async () => {
+  const { channel, sockets, received, logs } = await boot();
+  const sock = sockets[0];
+  assert.ok(sock);
+  try {
+    sock.emit("messages.upsert", {
+      type: "notify",
+      messages: [{
+        key: { id: "card-1", remoteJid: "5215500000001@s.whatsapp.net" },
+        message: {
+          contactMessage: {
+            displayName: "Nuria Ejemplo",
+            vcard: "BEGIN:VCARD\nVERSION:3.0\nFN:Nuria Ejemplo\nTEL;waid=525500000000:+52 55 0000 0000\nEND:VCARD",
+          },
+        },
+      }],
+    });
+    await waitFor(() => received.length >= 1);
+    assert.deepEqual(received[0]?.contacts, [{ name: "Nuria Ejemplo", phone: "+525500000000" }]);
+    assert.equal(received[0]?.text, "");
+    assert.equal(logs.text().includes("525500000000"), false);
+    assert.equal(logs.text().includes("Nuria"), false);
+  } finally {
+    await channel.stop();
+  }
+});
