@@ -1,7 +1,7 @@
 import type { Db } from "./db.js";
 import { normalizePhone } from "./phone.js";
 
-/** coordinator: runs the home. staff: works in it. member: known about, does not use Harmony. */
+/** coordinator: runs the home. staff: works in it. member: family; a user only if they have a phone. */
 export type PersonKind = "coordinator" | "staff" | "member";
 
 export interface Person {
@@ -34,10 +34,29 @@ export async function addPerson(
   }
 }
 
+/** Whoever holds this number, in the house now or before. For the code that registers people. */
+export async function findAnyoneByPhone(
+  db: Db,
+  rawPhone: string | null,
+): Promise<(Person & { active: boolean }) | null> {
+  const phone = rawPhone ? normalizePhone(rawPhone) : null;
+  if (!phone) return null;
+  const rows = await db.query<Person & { active: boolean }>(
+    `SELECT ${COLUMNS}, active FROM people WHERE phone = $1`,
+    [phone],
+  );
+  return rows[0] ?? null;
+}
+
 /** Identity: the active person whose phone a message came from, or null. */
 export async function findPersonByPhone(db: Db, fromPhone: string): Promise<Person | null> {
-  const phone = normalizePhone(fromPhone);
-  if (!phone) return null;
-  const rows = await db.query<Person>(`SELECT ${COLUMNS} FROM people WHERE phone = $1 AND active`, [phone]);
-  return rows[0] ?? null;
+  const found = await findAnyoneByPhone(db, fromPhone);
+  if (!found?.active) return null;
+  const { active: _, ...person } = found;
+  return person;
+}
+
+/** A house with nobody running it cannot be taught or asked anything. */
+export async function hasCoordinator(db: Db): Promise<boolean> {
+  return (await db.query("SELECT 1 FROM people WHERE kind = 'coordinator' AND active LIMIT 1")).length > 0;
 }

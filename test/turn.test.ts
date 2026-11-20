@@ -138,7 +138,8 @@ test("a model that never stops calling tools is cut off", async () => {
   const { db, channel, sentTo } = await setup(model);
   await channel.receive(PHONES.rosa, "hola");
   assert.ok(model.requests.length <= 6);
-  assert.match(sentTo(ROSA).at(-1)!, /no pude/i);
+  // Questions were already passed up, so the person is not asked to repeat the message.
+  assert.match(sentTo(ROSA).at(-1)!, /no hace falta que lo repitas/i);
   await db.close();
 });
 

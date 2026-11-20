@@ -10,7 +10,7 @@ import type { Model } from "./model.js";
 import { findPersonByPhone, type Person } from "./people.js";
 import { buildSystem, buildUserMessage, type PastMessage } from "./prompt.js";
 import { usableTranscript, type Transcriber } from "./voice.js";
-import { REPLY_TOOL, type replyInput, toolDefinition, toolsFor } from "./tools.js";
+import { ESCALATE_TOOL, REPLY_TOOL, type replyInput, toolDefinition, toolsFor } from "./tools.js";
 
 export interface TurnDeps {
   db: Db;
@@ -26,6 +26,8 @@ const MAX_MODEL_STEPS = 5;
 const HISTORY_MESSAGES = 20;
 const FAILURE_REPLY = "Perdón, tuve un problema y no pude contestar tu mensaje. Intenta de nuevo en un momento.";
 
+const FAILURE_AFTER_ACTING =
+  "Perdón, tuve un problema al terminar de contestarte. Lo que alcancé a hacer sí quedó registrado, así que no hace falta que lo repitas.";
 const CANNED = {
   noTranscriber: "Todavía no puedo escuchar notas de voz. ¿Me lo escribes, por favor?",
   notUnderstood: "Perdón, no pude entender tu nota de voz. ¿Me la repites o me lo escribes?",
@@ -98,11 +100,13 @@ export async function handleMessage(deps: TurnDeps, inbound: InboundMessage): Pr
   if (canned) {
     await enqueue(db, person.id, canned);
   } else {
+    const progress = { acted: false };
     try {
-      await runTurn(deps, person, history, text);
+      await runTurn(deps, person, history, text, progress);
     } catch (error) {
       await recordEvent(db, "error", person.id, { message: error instanceof Error ? error.message : String(error) });
-      await enqueue(db, person.id, FAILURE_REPLY);
+      // Asking to try again after something was already done would do it twice.
+      await enqueue(db, person.id, progress.acted ? FAILURE_AFTER_ACTING : FAILURE_REPLY);
     }
   }
   await deliverPending(db, deps.channel);
@@ -117,7 +121,14 @@ async function recentMessages(db: Db, person: Person): Promise<PastMessage[]> {
   return rows.reverse();
 }
 
-async function runTurn(deps: TurnDeps, person: Person, history: PastMessage[], text: string): Promise<void> {
+async function runTurn(
+  deps: TurnDeps,
+  person: Person,
+  history: PastMessage[],
+  text: string,
+  /** Set once a tool has changed something, so a later failure is worded accordingly. */
+  progress: { acted: boolean },
+): Promise<void> {
   const { db, model } = deps;
   const tools = toolsFor(person);
   // What waits on whoever runs the home is shown to them only.
@@ -180,7 +191,8 @@ async function runTurn(deps: TurnDeps, person: Person, history: PastMessage[], t
       } else {
         try {
           result(await tool.run(input.data, { db, person }));
-          if (tool.name === "subir_pregunta") escalated = true;
+          progress.acted = true;
+          if (tool.name === ESCALATE_TOOL) escalated = true;
         } catch (error) {
           // A refusal is for the model to read. Anything else is a fault: logged, and not shown.
           if (!(error instanceof Refused)) {

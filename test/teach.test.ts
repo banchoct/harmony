@@ -71,7 +71,7 @@ test("a restricted note taught for one person is seen by that person only", asyn
 
 test("a note is corrected in place", async () => {
   const model = scriptedModel(
-    (request) => [call("corregir_nota", { nota: idShown(request, "nota", "basura"), texto: "La basura sale lunes y jueves." })],
+    (request) => [call("corregir_nota", { nota: idShown(request, "nota", "basura"), texto: "La basura sale lunes y jueves.", de_salud: false })],
     [ok],
   );
   const { db, channel, beto, notesFor } = await setup(model);
@@ -200,7 +200,7 @@ test("a health proposal answered with no is dropped", async () => {
 
 test("correcting a health note also waits for a yes", async () => {
   const model = scriptedModel(
-    (request) => [call("corregir_nota", { nota: idShown(request, "nota", "cacahuate"), texto: "Leo es alérgico a la nuez." })],
+    (request) => [call("corregir_nota", { nota: idShown(request, "nota", "cacahuate"), texto: "Leo es alérgico a la nuez.", de_salud: true })],
     [ok],
   );
   const { db, channel, ana, notesFor } = await setup(model);
@@ -227,7 +227,7 @@ test("a health note for everyone is refused, not proposed", async () => {
 test("a note or person that does not exist is refused and nothing changes", async () => {
   const missing = "00000000-0000-4000-8000-000000000000";
   const model = scriptedModel(
-    [call("corregir_nota", { nota: missing, texto: "x" }), call("retirar_nota", { nota: "no-es-id" }), note("y", { sobre: [missing] })],
+    [call("corregir_nota", { nota: missing, texto: "x", de_salud: false }), call("retirar_nota", { nota: "no-es-id" }), note("y", { sobre: [missing] })],
     (request) => {
       assert.equal(shownTo(request).match(/"is_error":true/g)?.length, 3);
       return [ok];

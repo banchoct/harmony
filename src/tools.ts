@@ -31,6 +31,7 @@ function tool<Schema extends z.ZodType>(definition: {
 }
 
 export const REPLY_TOOL = "responder";
+export const ESCALATE_TOOL = "subir_pregunta";
 
 export const replyInput = z.object({
   mensaje: z.string().describe("El mensaje para la persona, tal como lo va a leer."),
@@ -52,7 +53,7 @@ const responder = tool({
 });
 
 const subirPregunta = tool({
-  name: "subir_pregunta",
+  name: ESCALATE_TOOL,
   description:
     "Pasa a quien lleva la casa una pregunta que la memoria de la casa no contesta. " +
     "Úsala en vez de suponer. Después avisa a la persona que ya preguntaste y que le avisarás.",
@@ -69,6 +70,7 @@ const subirPregunta = tool({
       "SELECT id, name FROM people WHERE kind = 'coordinator' AND active AND phone IS NOT NULL ORDER BY created_at",
     );
     if (coordinators.length === 0) throw new Refused("No hay a quién subirle la pregunta.");
+    if (!pregunta.trim()) throw new Refused("Falta la pregunta.");
     const [question] = await db.query<{ id: string }>(
       "INSERT INTO pending_questions (asked_by, question) VALUES ($1, $2) RETURNING id",
       [person.id, pregunta],
@@ -122,8 +124,12 @@ const corregirNota = tool({
   input: z.object({
     nota: z.string().describe("Identificador de la nota."),
     texto: z.string().describe("El texto nuevo, completo."),
+    de_salud: z
+      .boolean()
+      .describe("true si el texto nuevo habla de salud: alergias, medicinas, enfermedades, tratamientos."),
   }),
-  run: ({ nota, texto }, { db, person }) => submit(db, person, { type: "correct_note", noteId: nota, body: texto }),
+  run: ({ nota, texto, de_salud }, { db, person }) =>
+    submit(db, person, { type: "correct_note", noteId: nota, body: texto, health: de_salud }),
 });
 
 const retirarNota = tool({

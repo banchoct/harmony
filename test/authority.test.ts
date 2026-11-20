@@ -121,7 +121,9 @@ test("a person who left can be registered again with the same number", async () 
   assert.equal(await findPersonByPhone(db, PHONES.beto), null);
   await channel.receive(PHONES.ana, "Beto regresó");
   assert.equal((await findPersonByPhone(db, PHONES.beto))?.kind, "staff");
-  assert.equal((await db.query("SELECT 1 FROM people WHERE name = 'Beto'")).length, 1);
+  // A new person, not the old row brought back.
+  assert.equal((await db.query("SELECT 1 FROM people WHERE name = 'Beto' AND active")).length, 1);
+  assert.equal((await db.query("SELECT 1 FROM people WHERE name = 'Beto'")).length, 2);
   await db.close();
 });
 

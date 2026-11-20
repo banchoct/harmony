@@ -2,13 +2,14 @@ import type { Db } from "./db.js";
 import { enqueue } from "./delivery.js";
 import { recordEvent } from "./log.js";
 import { correctNote, findNote, retireNote, saveNote, type NoteInput } from "./memory.js";
-import { addPerson, type Person, type PersonKind } from "./people.js";
+import { addPerson, findAnyoneByPhone, type Person, type PersonKind } from "./people.js";
 import { normalizePhone } from "./phone.js";
 
 /** A change to the memory asked for by whoever runs the home. */
 export type Action =
   | { type: "save_note"; note: NoteInput }
-  | { type: "correct_note"; noteId: string; body: string }
+  /** `health` is what the model says of the new text; the stored note decides the rest. */
+  | { type: "correct_note"; noteId: string; body: string; health: boolean }
   | { type: "retire_note"; noteId: string }
   | { type: "answer_question"; questionId: string; message: string; note: NoteInput }
   | { type: "register_person"; name: string; kind: PersonKind; phone: string | null }
@@ -16,28 +17,25 @@ export type Action =
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** An unanswered proposal stops being confirmable after this long. */
+const PROPOSAL_LIFE = "24 hours";
+
 /** Tools throw this to tell the model, in plain words, why something was not done. */
 export class Refused extends Error {}
 
-export function requireId(id: string, what: string): void {
+function requireId(id: string, what: string): void {
   if (!UUID.test(id)) throw new Refused(`«${id}» no es el identificador de ${what}.`);
 }
 
-/** Whoever holds this number, in the house now or before. */
-async function personWithPhone(
-  db: Db,
-  rawPhone: string | null,
-): Promise<{ id: string; name: string; kind: PersonKind; active: boolean } | null> {
-  const phone = rawPhone ? normalizePhone(rawPhone) : null;
-  if (!phone) return null;
-  const rows = await db.query<{ id: string; name: string; kind: PersonKind; active: boolean }>(
-    "SELECT id, name, kind, active FROM people WHERE phone = $1",
-    [phone],
-  );
-  return rows[0] ?? null;
+/** Refuses empty or oversized text here, in words, before the database refuses it in code. */
+function requireText(value: string, what: string, max: number): void {
+  const length = value.trim().length;
+  if (length === 0) throw new Refused(`Falta ${what}.`);
+  if (length > max) throw new Refused(`${what} es demasiado largo: máximo ${max} caracteres.`);
 }
 
 async function checkNote(db: Db, note: NoteInput): Promise<void> {
+  requireText(note.body, "el texto de la nota", 4000);
   if (note.health && note.audience !== "restricted")
     throw new Refused("Una nota de salud no puede ser visible para todos: hazla restringida y di quién la ve.");
   const ids = [...new Set([...(note.viewers ?? []), ...(note.about ?? [])])];
@@ -53,49 +51,75 @@ async function existingNote(db: Db, id: string): Promise<{ body: string; health:
   return note;
 }
 
+const fold = (text: string) => text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim();
+
+/** "Margot" and "Margot Fasja" are one person; "Lupita" on Rosa's number is not. */
+function sameName(left: string, right: string): boolean {
+  const [a, b] = [fold(left), fold(right)];
+  return a.includes(b) || b.includes(a);
+}
+
+const KIND_WORDS: Record<PersonKind, string> = {
+  coordinator: "alguien que lleva la casa",
+  staff: "personal",
+  member: "familia",
+};
+
 /**
- * Checks the action can be done and says whether it must wait for a yes: anything touching
- * health (autonomy level 3) and anything that gives or takes away authority over the house.
- * `summary` is what whoever runs the home is asked to confirm.
+ * Checks the action can be done. Returns what whoever runs the home must confirm with a yes, or
+ * null when it can be done now. A yes is needed for anything touching health (autonomy level 3),
+ * for giving or taking away authority over the house, and for putting another name on a number
+ * that already belongs to someone.
  */
-async function inspect(db: Db, by: Person, action: Action): Promise<{ confirm: boolean; summary: string }> {
+async function inspect(db: Db, by: Person, action: Action): Promise<string | null> {
   switch (action.type) {
     case "save_note":
       await checkNote(db, action.note);
-      return { confirm: action.note.health ?? false, summary: `Guardar nota de salud: «${action.note.body}»` };
+      return action.note.health ? `Guardar nota de salud: «${action.note.body}»` : null;
     case "correct_note": {
+      requireText(action.body, "el texto de la nota", 4000);
       const note = await existingNote(db, action.noteId);
-      return { confirm: note.health, summary: `Corregir la nota de salud «${note.body}» por: «${action.body}»` };
+      // The audience of a note does not change when it is corrected, so health text must not
+      // arrive this way into a note that others can see.
+      if (action.health && !note.health)
+        throw new Refused(
+          "Esa nota no es de salud y la pueden ver otras personas. Lo de salud va en una nota aparte: guárdala con guardar_nota, restringida.",
+        );
+      return note.health ? `Corregir la nota de salud «${note.body}» por: «${action.body}»` : null;
     }
     case "retire_note": {
       const note = await existingNote(db, action.noteId);
-      return { confirm: note.health, summary: `Retirar la nota de salud: «${note.body}»` };
+      return note.health ? `Retirar la nota de salud: «${note.body}»` : null;
     }
     case "answer_question": {
       requireId(action.questionId, "una pregunta pendiente");
+      requireText(action.message, "el mensaje para quien preguntó", 4000);
       const open = await db.query("SELECT 1 FROM pending_questions WHERE id = $1 AND answered_at IS NULL", [
         action.questionId,
       ]);
       if (open.length === 0) throw new Refused("Esa pregunta no existe o ya fue contestada.");
       await checkNote(db, action.note);
-      return {
-        confirm: action.note.health ?? false,
-        summary: `Contestar una pregunta pendiente y guardar la nota de salud: «${action.note.body}»`,
-      };
+      return action.note.health
+        ? `Contestar una pregunta pendiente y guardar la nota de salud: «${action.note.body}»`
+        : null;
     }
     case "register_person": {
-      // A number the house already has is that same person: registering it again changes
-      // them (or brings them back) instead of adding a second one.
-      const existing = await personWithPhone(db, action.phone);
-      const hadAuthority = existing?.active === true && existing.kind === "coordinator";
-      if (existing?.id === by.id && action.kind !== "coordinator")
+      requireText(action.name, "el nombre", 120);
+      if (action.phone !== null && !normalizePhone(action.phone))
+        throw new Refused("Ese teléfono no es válido. Pídelo con clave de país.");
+      const holder = await findAnyoneByPhone(db, action.phone);
+      // Someone who left the house is not this person: their number starts a new one.
+      const current = holder?.active ? holder : null;
+      const hasAuthority = current?.kind === "coordinator";
+      if (current?.id === by.id && action.kind !== "coordinator")
         throw new Refused("No puedes quitarte a ti la autoridad sobre la casa.");
-      if (action.kind === "coordinator")
-        return {
-          confirm: !hadAuthority,
-          summary: `Dar autoridad sobre la casa a ${action.name}${action.phone ? `, teléfono ${action.phone}` : ""}`,
-        };
-      return { confirm: hadAuthority, summary: `Quitar a ${existing?.name ?? action.name} la autoridad sobre la casa` };
+      if (action.kind === "coordinator" && !hasAuthority)
+        return `Dar autoridad sobre la casa a ${action.name}${action.phone ? `, teléfono ${action.phone}` : ""}`;
+      if (hasAuthority && action.kind !== "coordinator")
+        return `Quitar a ${current.name} la autoridad sobre la casa`;
+      if (current && !sameName(current.name, action.name))
+        return `Ese número hoy es de ${current.name}. Cambiar esa persona a ${action.name}, ${KIND_WORDS[action.kind]}`;
+      return null;
     }
     case "remove_person": {
       requireId(action.personId, "una persona");
@@ -105,7 +129,7 @@ async function inspect(db: Db, by: Person, action: Action): Promise<{ confirm: b
         [action.personId],
       );
       if (!person) throw new Refused("Esa persona no existe en la casa.");
-      return { confirm: person.kind === "coordinator", summary: `Dar de baja a ${person.name}, que lleva la casa` };
+      return person.kind === "coordinator" ? `Dar de baja a ${person.name}, que lleva la casa` : null;
     }
   }
 }
@@ -139,25 +163,16 @@ async function apply(db: Db, by: Person, action: Action): Promise<string> {
       return "Respuesta enviada a quien preguntó y guardada en la memoria.";
     }
     case "register_person": {
-      const existing = await personWithPhone(db, action.phone);
-      if (existing) {
-        await db.query("UPDATE people SET name = $2, kind = $3, active = true WHERE id = $1", [
-          existing.id,
-          action.name,
-          action.kind,
-        ]);
-        await recordEvent(db, "person_updated", by.id, { person_id: existing.id });
-        return `${action.name} ya estaba en la casa con ese número; quedó actualizada.`;
+      const holder = await findAnyoneByPhone(db, action.phone);
+      if (holder?.active) {
+        await db.query("UPDATE people SET name = $2, kind = $3 WHERE id = $1", [holder.id, action.name, action.kind]);
+        await recordEvent(db, "person_updated", by.id, { person_id: holder.id });
+        return `${action.name} ya estaba en la casa con ese número; quedó como ${KIND_WORDS[action.kind]}.`;
       }
-      let added: Person;
-      try {
-        added = await addPerson(db, { name: action.name, kind: action.kind, phone: action.phone ?? undefined });
-      } catch (error) {
-        const code = error instanceof Error ? error.message : "";
-        if (code === "PHONE_INVALID") throw new Refused("Ese teléfono no es válido. Pídelo con clave de país.");
-        if (code === "PHONE_TAKEN") throw new Refused("Ese teléfono ya es de otra persona de la casa.");
-        throw error;
-      }
+      // The number of someone who left is freed, so the new person shares nothing with them:
+      // not their notes, not their conversation, not their unsent messages.
+      if (holder) await db.query("UPDATE people SET phone = NULL WHERE id = $1", [holder.id]);
+      const added = await addPerson(db, { name: action.name, kind: action.kind, phone: action.phone ?? undefined });
       await recordEvent(db, "person_registered", by.id, { person_id: added.id });
       return `${added.name} quedó en la casa con el identificador ${added.id}.`;
     }
@@ -175,11 +190,11 @@ async function apply(db: Db, by: Person, action: Action): Promise<string> {
 
 /** Does the action now, or holds it as a proposal when it must wait for a yes. */
 export async function submit(db: Db, by: Person, action: Action): Promise<string> {
-  const { confirm, summary } = await inspect(db, by, action);
-  if (!confirm) return apply(db, by, action);
+  const toConfirm = await inspect(db, by, action);
+  if (!toConfirm) return apply(db, by, action);
   const [proposal] = await db.query<{ id: string }>(
     "INSERT INTO proposals (requested_by, action, summary) VALUES ($1, $2::text::jsonb, $3) RETURNING id",
-    [by.id, JSON.stringify(action), summary],
+    [by.id, JSON.stringify(action), toConfirm],
   );
   await recordEvent(db, "confirmation_requested", by.id, { proposal_id: proposal!.id });
   return (
@@ -188,31 +203,48 @@ export async function submit(db: Db, by: Person, action: Action): Promise<string
   );
 }
 
+/** Closes the proposals nobody answered in time, so an old one cannot be confirmed by a later yes. */
+async function expireOldProposals(db: Db): Promise<void> {
+  const expired = await db.query<{ id: string; requested_by: string }>(
+    `UPDATE proposals SET resolved_at = now(), outcome = 'expired'
+     WHERE resolved_at IS NULL AND created_at < now() - interval '${PROPOSAL_LIFE}'
+     RETURNING id, requested_by`,
+  );
+  for (const proposal of expired) {
+    await recordEvent(db, "confirmation_resolved", proposal.requested_by, { proposal_id: proposal.id, outcome: "expired" });
+  }
+}
+
 /** Resolves a proposal with the yes or no of whoever runs the home. */
 export async function resolve(db: Db, by: Person, proposalId: string, confirmed: boolean): Promise<string> {
   requireId(proposalId, "una propuesta");
+  await expireOldProposals(db);
   // The yes has to come in a message written after the proposal was made. Otherwise the model
   // could propose and confirm by itself within one turn, and the wait would mean nothing.
   const [proposal] = await db.query<{ action: Action }>(
-    `UPDATE proposals SET resolved_at = now(), outcome = $2
+    `SELECT action FROM proposals
      WHERE id = $1 AND resolved_at IS NULL AND EXISTS (
        SELECT 1 FROM messages
-       WHERE person_id = $3 AND direction = 'in' AND messages.created_at > proposals.created_at
-     ) RETURNING action`,
-    [proposalId, confirmed ? "confirmed" : "rejected", by.id],
+       WHERE person_id = $2 AND direction = 'in' AND messages.created_at > proposals.created_at
+     )`,
+    [proposalId, by.id],
   );
   if (!proposal) {
     throw new Refused(
-      "Esa propuesta no existe, ya se resolvió, o todavía no hay un mensaje de quien lleva la casa posterior a ella.",
+      "Esa propuesta no existe, ya se resolvió o venció, o todavía no hay un mensaje de quien lleva la casa posterior a ella.",
     );
   }
-  await recordEvent(db, "confirmation_resolved", by.id, {
-    proposal_id: proposalId,
-    outcome: confirmed ? "confirmed" : "rejected",
-  });
-  if (!confirmed) return "Propuesta descartada. No se guardó nada.";
-  await inspect(db, by, proposal.action);
-  return apply(db, by, proposal.action);
+  // Applied first and closed after: a yes that cannot be applied leaves the proposal open
+  // instead of being used up with nothing done.
+  let result = "Propuesta descartada. No se guardó nada.";
+  if (confirmed) {
+    await inspect(db, by, proposal.action);
+    result = await apply(db, by, proposal.action);
+  }
+  const outcome = confirmed ? "confirmed" : "rejected";
+  await db.query("UPDATE proposals SET resolved_at = now(), outcome = $2 WHERE id = $1", [proposalId, outcome]);
+  await recordEvent(db, "confirmation_resolved", by.id, { proposal_id: proposalId, outcome });
+  return result;
 }
 
 export interface OpenItems {
@@ -222,6 +254,7 @@ export interface OpenItems {
 
 /** What is waiting on whoever runs the home: questions passed up and proposals to confirm. */
 export async function openItems(db: Db): Promise<OpenItems> {
+  await expireOldProposals(db);
   const questions = await db.query<{ id: string; question: string; askedBy: string }>(
     `SELECT q.id, q.question, people.name AS "askedBy"
      FROM pending_questions q JOIN people ON people.id = q.asked_by
