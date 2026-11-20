@@ -59,6 +59,26 @@ function sameName(left: string, right: string): boolean {
   return a.includes(b) || b.includes(a);
 }
 
+/**
+ * The person of the house a registration is about, if they are already in it: whoever holds
+ * the number, or else someone of that exact name who has no number yet. That second case is
+ * how a person named in a description of the house later gets their phone, from a contact
+ * card, without becoming two people.
+ */
+async function alreadyInHouse(
+  db: Db,
+  name: string,
+  phone: string | null,
+): Promise<{ id: string; name: string; kind: PersonKind; hasPhone: boolean } | null> {
+  const holder = await findAnyoneByPhone(db, phone);
+  if (holder?.active) return { id: holder.id, name: holder.name, kind: holder.kind, hasPhone: true };
+  const withoutPhone = await db.query<{ id: string; name: string; kind: PersonKind }>(
+    "SELECT id, name, kind FROM people WHERE active AND phone IS NULL ORDER BY created_at",
+  );
+  const namesake = withoutPhone.find((person) => fold(person.name) === fold(name));
+  return namesake ? { ...namesake, hasPhone: false } : null;
+}
+
 const KIND_WORDS: Record<PersonKind, string> = {
   coordinator: "alguien que lleva la casa",
   staff: "personal",
@@ -107,9 +127,8 @@ async function inspect(db: Db, by: Person, action: Action): Promise<string | nul
       requireText(action.name, "el nombre", 120);
       if (action.phone !== null && !normalizePhone(action.phone))
         throw new Refused("Ese teléfono no es válido. Pídelo con clave de país.");
-      const holder = await findAnyoneByPhone(db, action.phone);
       // Someone who left the house is not this person: their number starts a new one.
-      const current = holder?.active ? holder : null;
+      const current = await alreadyInHouse(db, action.name, action.phone);
       const hasAuthority = current?.kind === "coordinator";
       if (current?.id === by.id && action.kind !== "coordinator")
         throw new Refused("No puedes quitarte a ti la autoridad sobre la casa.");
@@ -164,14 +183,22 @@ async function apply(db: Db, by: Person, action: Action): Promise<string> {
     }
     case "register_person": {
       const holder = await findAnyoneByPhone(db, action.phone);
-      if (holder?.active) {
-        await db.query("UPDATE people SET name = $2, kind = $3 WHERE id = $1", [holder.id, action.name, action.kind]);
-        await recordEvent(db, "person_updated", by.id, { person_id: holder.id });
-        return `${action.name} ya estaba en la casa con ese número; quedó como ${KIND_WORDS[action.kind]}.`;
-      }
-      // The number of someone who left is freed, so the new person shares nothing with them:
+      // The number of someone who left is freed, so whoever gets it shares nothing with them:
       // not their notes, not their conversation, not their unsent messages.
-      if (holder) await db.query("UPDATE people SET phone = NULL WHERE id = $1", [holder.id]);
+      if (holder && !holder.active) await db.query("UPDATE people SET phone = NULL WHERE id = $1", [holder.id]);
+      const current = await alreadyInHouse(db, action.name, action.phone);
+      if (current) {
+        // Their number is kept when they have one; given when they had none and one came.
+        await db.query("UPDATE people SET name = $2, kind = $3, phone = coalesce(phone, $4) WHERE id = $1", [
+          current.id,
+          action.name,
+          action.kind,
+          action.phone ? normalizePhone(action.phone) : null,
+        ]);
+        await recordEvent(db, "person_updated", by.id, { person_id: current.id });
+        const gained = !current.hasPhone && action.phone ? " Ya tiene teléfono y puede escribirme." : "";
+        return `${action.name} ya estaba en la casa; quedó como ${KIND_WORDS[action.kind]}.${gained}`;
+      }
       const added = await addPerson(db, { name: action.name, kind: action.kind, phone: action.phone ?? undefined });
       await recordEvent(db, "person_registered", by.id, { person_id: added.id });
       return `${added.name} quedó en la casa con el identificador ${added.id}.`;

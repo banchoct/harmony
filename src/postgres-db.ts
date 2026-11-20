@@ -32,7 +32,7 @@ export function postgresSsl(databaseUrl: string): PostgresSsl {
 }
 
 /** The production database, reached with postgres.js. */
-export async function openPostgres(databaseUrl: string): Promise<Db> {
+export async function openPostgres(databaseUrl: string, applyMigrations = true): Promise<Db> {
   const sql = postgres(databaseUrl, {
     ssl: postgresSsl(databaseUrl),
     max: 3,
@@ -46,14 +46,16 @@ export async function openPostgres(databaseUrl: string): Promise<Db> {
     const rows = await sql.unsafe(text, params as never[]);
     return [...rows] as Row[];
   };
-  await migrate({
-    query,
-    async applyMigration(name, text) {
-      await sql.begin(async (tx) => {
-        await tx.unsafe(text);
-        await tx.unsafe("INSERT INTO schema_migrations (name) VALUES ($1)", [name]);
-      });
-    },
-  });
+  if (applyMigrations) {
+    await migrate({
+      query,
+      async applyMigration(name, text) {
+        await sql.begin(async (tx) => {
+          await tx.unsafe(text);
+          await tx.unsafe("INSERT INTO schema_migrations (name) VALUES ($1)", [name]);
+        });
+      },
+    });
+  }
   return { query, close: () => sql.end() };
 }

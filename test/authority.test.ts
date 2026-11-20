@@ -151,3 +151,45 @@ test("taking authority away from someone who runs the home waits for a yes, and 
   assert.equal((await findPersonByPhone(db, PHONES.ana))?.kind, "coordinator");
   await db.close();
 });
+
+test("a person first registered without a phone gets it later instead of being registered twice", async () => {
+  const model = scriptedModel(
+    [call("registrar_persona", { nombre: "Maggie", tipo: "personal", telefono: null })],
+    [ok],
+    [call("registrar_persona", { nombre: "maggie", tipo: "personal", telefono: "+5215500000006" })],
+    [ok],
+    [reply("Hola, Maggie.", "otro")],
+  );
+  const { db, channel } = await setup(model);
+  await channel.receive(PHONES.ana, "Maggie cocina");
+  await channel.receive(PHONES.ana, "El número de Maggie es 55 0000 0006");
+  assert.equal((await db.query("SELECT 1 FROM people WHERE lower(name) = 'maggie'")).length, 1);
+  assert.equal((await findPersonByPhone(db, "+5215500000006"))?.kind, "staff");
+  await channel.receive("+5215500000006", "Hola");
+  assert.deepEqual(channel.sent.filter((m) => m.toPhone === "+525500000006").map((m) => m.text), ["Hola, Maggie."]);
+  await db.close();
+});
+
+test("registering the same person without a phone twice keeps one person", async () => {
+  const again = () => call("registrar_persona", { nombre: "Elías", tipo: "miembro", telefono: null });
+  const model = scriptedModel([again()], [ok], [call("registrar_persona", { nombre: "Elias", tipo: "miembro", telefono: null })], [ok]);
+  const { db, channel } = await setup(model);
+  await channel.receive(PHONES.ana, "Elías tiene 5 años");
+  await channel.receive(PHONES.ana, "Elías es mi hijo");
+  assert.equal((await db.query("SELECT 1 FROM people WHERE name IN ('Elías', 'Elias')")).length, 1);
+  await db.close();
+});
+
+test("two people with the same name and different numbers stay two people", async () => {
+  const model = scriptedModel(
+    [call("registrar_persona", { nombre: "Susy", tipo: "personal", telefono: "+5215500000007" })],
+    [ok],
+    [call("registrar_persona", { nombre: "Susy", tipo: "personal", telefono: "+5215500000008" })],
+    [ok],
+  );
+  const { db, channel } = await setup(model);
+  await channel.receive(PHONES.ana, "Susy ayuda los fines de semana");
+  await channel.receive(PHONES.ana, "Hay otra Susy");
+  assert.equal((await db.query("SELECT 1 FROM people WHERE name = 'Susy'")).length, 2);
+  await db.close();
+});

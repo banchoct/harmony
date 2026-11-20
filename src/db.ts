@@ -63,8 +63,9 @@ async function openInMemory(): Promise<PGlite> {
  *   a directory            a database saved in that folder
  *   nothing                a database in memory, for tests and the demo
  */
-export async function openDb(target?: string): Promise<Db> {
-  if (target && /^postgres(ql)?:\/\//.test(target)) return openPostgres(target);
+export async function openDb(target?: string, options: { migrate?: boolean } = {}): Promise<Db> {
+  // `migrate: false` is for looking at the production database without changing its shape.
+  if (target && /^postgres(ql)?:\/\//.test(target)) return openPostgres(target, options.migrate ?? true);
   if (!target) return pgliteDb(await openInMemory());
   await mkdir(dirname(resolve(target)), { recursive: true });
   const db = pgliteDb(new PGlite(target));
