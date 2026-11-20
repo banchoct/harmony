@@ -87,3 +87,65 @@ test("words passed up by staff are shown to whoever runs the home as quoted data
   await channel.receive(PHONES.ana, "Hola");
   await db.close();
 });
+
+test("registering a number the house already has changes that person instead of failing", async () => {
+  const asFamily = call("registrar_persona", { nombre: "Pablo", tipo: "miembro", telefono: "+5215500000005" });
+  const model = scriptedModel(
+    [asFamily],
+    [ok],
+    [newCoordinator],
+    [reply("¿Confirmas?", "otro")],
+    (request) => [call("confirmar", { propuesta: idShown(request, "propuesta"), decision: "si" })],
+    [ok],
+  );
+  const { db, channel } = await setup(model);
+  await channel.receive(PHONES.ana, "Pablo es de la familia");
+  assert.equal((await findPersonByPhone(db, "+5215500000005"))?.kind, "member");
+  await channel.receive(PHONES.ana, "Mejor que Pablo también lleve la casa");
+  assert.equal((await findPersonByPhone(db, "+5215500000005"))?.kind, "member");
+  await channel.receive(PHONES.ana, "Sí");
+  assert.equal((await findPersonByPhone(db, "+5215500000005"))?.kind, "coordinator");
+  assert.equal((await db.query("SELECT 1 FROM people WHERE name = 'Pablo'")).length, 1);
+  await db.close();
+});
+
+test("a person who left can be registered again with the same number", async () => {
+  const model = scriptedModel(
+    (request) => [call("dar_de_baja_persona", { persona: idShown(request, "persona", "Beto") })],
+    [ok],
+    [call("registrar_persona", { nombre: "Beto", tipo: "personal", telefono: PHONES.beto })],
+    [ok],
+  );
+  const { db, channel } = await setup(model);
+  await channel.receive(PHONES.ana, "Beto ya no trabaja aquí");
+  assert.equal(await findPersonByPhone(db, PHONES.beto), null);
+  await channel.receive(PHONES.ana, "Beto regresó");
+  assert.equal((await findPersonByPhone(db, PHONES.beto))?.kind, "staff");
+  assert.equal((await db.query("SELECT 1 FROM people WHERE name = 'Beto'")).length, 1);
+  await db.close();
+});
+
+test("taking authority away from someone who runs the home waits for a yes, and nobody can take their own", async () => {
+  const model = scriptedModel(
+    [newCoordinator],
+    [ok],
+    (request) => [call("confirmar", { propuesta: idShown(request, "propuesta"), decision: "si" })],
+    [ok],
+    [call("registrar_persona", { nombre: "Pablo", tipo: "personal", telefono: "+5215500000005" })],
+    [ok],
+    [call("registrar_persona", { nombre: "Ana", tipo: "personal", telefono: PHONES.ana })],
+    (request) => {
+      assert.match(shownTo(request), /"is_error":true/);
+      return [ok];
+    },
+  );
+  const { db, channel } = await setup(model);
+  await channel.receive(PHONES.ana, "Pablo también lleva la casa");
+  await channel.receive(PHONES.ana, "Sí");
+  await channel.receive(PHONES.ana, "Pablo ya solo es personal");
+  assert.equal((await findPersonByPhone(db, "+5215500000005"))?.kind, "coordinator");
+  assert.equal((await db.query("SELECT 1 FROM proposals WHERE resolved_at IS NULL")).length, 1);
+  await channel.receive(PHONES.ana, "Yo ya no llevo la casa");
+  assert.equal((await findPersonByPhone(db, PHONES.ana))?.kind, "coordinator");
+  await db.close();
+});

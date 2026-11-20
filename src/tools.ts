@@ -168,7 +168,8 @@ const registrarPersona = tool({
   name: "registrar_persona",
   description:
     "Da de alta a una persona de la casa. Con teléfono podrá escribirle a Harmony; sin teléfono solo se sabe de ella. " +
-    "Dar de alta a alguien que lleva la casa no se hace directo: queda como propuesta hasta que confirme.",
+    "Si el número ya es de alguien de la casa, cambia a esa persona (su nombre o su tipo) en vez de crear otra. " +
+    "Dar o quitar la autoridad de llevar la casa no se hace directo: queda como propuesta hasta que confirme.",
   input: z.object({
     nombre: z.string(),
     tipo: z

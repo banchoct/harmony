@@ -3,6 +3,7 @@ import { enqueue } from "./delivery.js";
 import { recordEvent } from "./log.js";
 import { correctNote, findNote, retireNote, saveNote, type NoteInput } from "./memory.js";
 import { addPerson, type Person, type PersonKind } from "./people.js";
+import { normalizePhone } from "./phone.js";
 
 /** A change to the memory asked for by whoever runs the home. */
 export type Action =
@@ -20,6 +21,20 @@ export class Refused extends Error {}
 
 export function requireId(id: string, what: string): void {
   if (!UUID.test(id)) throw new Refused(`«${id}» no es el identificador de ${what}.`);
+}
+
+/** Whoever holds this number, in the house now or before. */
+async function personWithPhone(
+  db: Db,
+  rawPhone: string | null,
+): Promise<{ id: string; name: string; kind: PersonKind; active: boolean } | null> {
+  const phone = rawPhone ? normalizePhone(rawPhone) : null;
+  if (!phone) return null;
+  const rows = await db.query<{ id: string; name: string; kind: PersonKind; active: boolean }>(
+    "SELECT id, name, kind, active FROM people WHERE phone = $1",
+    [phone],
+  );
+  return rows[0] ?? null;
 }
 
 async function checkNote(db: Db, note: NoteInput): Promise<void> {
@@ -68,11 +83,20 @@ async function inspect(db: Db, by: Person, action: Action): Promise<{ confirm: b
         summary: `Contestar una pregunta pendiente y guardar la nota de salud: «${action.note.body}»`,
       };
     }
-    case "register_person":
-      return {
-        confirm: action.kind === "coordinator",
-        summary: `Dar autoridad sobre la casa a ${action.name}${action.phone ? `, teléfono ${action.phone}` : ""}`,
-      };
+    case "register_person": {
+      // A number the house already has is that same person: registering it again changes
+      // them (or brings them back) instead of adding a second one.
+      const existing = await personWithPhone(db, action.phone);
+      const hadAuthority = existing?.active === true && existing.kind === "coordinator";
+      if (existing?.id === by.id && action.kind !== "coordinator")
+        throw new Refused("No puedes quitarte a ti la autoridad sobre la casa.");
+      if (action.kind === "coordinator")
+        return {
+          confirm: !hadAuthority,
+          summary: `Dar autoridad sobre la casa a ${action.name}${action.phone ? `, teléfono ${action.phone}` : ""}`,
+        };
+      return { confirm: hadAuthority, summary: `Quitar a ${existing?.name ?? action.name} la autoridad sobre la casa` };
+    }
     case "remove_person": {
       requireId(action.personId, "una persona");
       if (action.personId === by.id) throw new Refused("No puedes darte de baja a ti misma.");
@@ -115,6 +139,16 @@ async function apply(db: Db, by: Person, action: Action): Promise<string> {
       return "Respuesta enviada a quien preguntó y guardada en la memoria.";
     }
     case "register_person": {
+      const existing = await personWithPhone(db, action.phone);
+      if (existing) {
+        await db.query("UPDATE people SET name = $2, kind = $3, active = true WHERE id = $1", [
+          existing.id,
+          action.name,
+          action.kind,
+        ]);
+        await recordEvent(db, "person_updated", by.id, { person_id: existing.id });
+        return `${action.name} ya estaba en la casa con ese número; quedó actualizada.`;
+      }
       let added: Person;
       try {
         added = await addPerson(db, { name: action.name, kind: action.kind, phone: action.phone ?? undefined });
