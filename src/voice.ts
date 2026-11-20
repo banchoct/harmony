@@ -1,10 +1,8 @@
 /**
  * whisper-1 accepts WhatsApp .ogg/opus as sent. Newer transcribe models
  * often require a conversion this process does not do.
- * Estado: implementado. Las pruebas simulan la API; una nota real de la
- * casa queda pendiente de validación independiente.
  */
-export const DEFAULT_TRANSCRIBE_MODEL = "whisper-1";
+const DEFAULT_TRANSCRIBE_MODEL = "whisper-1";
 
 /** OpenAI rejects audio above this size. It is a size limit, not a duration. */
 export const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
@@ -37,7 +35,7 @@ export function createOpenAITranscriber(options: {
   };
 }
 
-export async function transcribeWithOpenAI(input: {
+async function transcribeWithOpenAI(input: {
   apiKey: string;
   model: string;
   bytes: Uint8Array;

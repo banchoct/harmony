@@ -1,12 +1,7 @@
+import type { SharedContact } from "../channel.js";
 import { normalizePhone } from "../phone.js";
 
-/** A person on a contact card shared in a chat. `phone` is null when the card has no usable number. */
-export interface SharedContact {
-  name: string;
-  phone: string | null;
-}
-
-export interface BaileysContactCarrier {
+interface BaileysContactCarrier {
   contactMessage?: { vcard?: string | null } | null;
   contactsArrayMessage?: { contacts?: Array<{ vcard?: string | null } | null> | null } | null;
 }

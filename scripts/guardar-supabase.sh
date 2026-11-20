@@ -3,6 +3,8 @@
 # Asks for the string as Supabase shows it and for the database password, puts the password
 # in its place, and adds verified TLS. Nothing typed here is printed or kept in the history.
 set -eu
+# If this is interrupted while the typing is hidden, show typing again.
+trap 'stty echo 2>/dev/null || true' EXIT
 printf 'Pega la cadena de conexión de Supabase y da Enter (o solo Enter para conservar la ya guardada): '
 stty -echo 2>/dev/null || true; IFS= read -r CADENA; stty echo 2>/dev/null || true; echo
 printf 'Pega la contraseña de la base de datos y da Enter: '

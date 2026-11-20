@@ -5,6 +5,12 @@ export interface VoiceNote {
   seconds?: number | null;
 }
 
+/** A person on a contact card shared in a chat. `phone` is null when the card has no usable number. */
+export interface SharedContact {
+  name: string;
+  phone: string | null;
+}
+
 export interface InboundMessage {
   id: string;
   /** Who the message is from. Identity comes from here, never from the text. */
@@ -22,8 +28,8 @@ export interface InboundMessage {
   audioBytes?: number | null;
   /** A file came with the message. Harmony does not read files yet. */
   attachment?: { kind: "pdf" | "foto"; name: string };
-  /** Contact cards shared in the message. `phone` is null when a card has no usable number. */
-  contacts?: Array<{ name: string; phone: string | null }>;
+  /** Contact cards shared in the message. */
+  contacts?: SharedContact[];
 }
 
 export type MessageHandler = (message: InboundMessage) => Promise<void>;

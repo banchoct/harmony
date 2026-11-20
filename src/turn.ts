@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { z } from "zod";
 import { openItems, Refused } from "./actions.js";
-import type { Channel, InboundMessage } from "./channel.js";
+import type { Channel, InboundMessage, SharedContact } from "./channel.js";
 import type { Db } from "./db.js";
 import { deliverPending, enqueue } from "./delivery.js";
 import { recordEvent } from "./log.js";
@@ -38,7 +38,7 @@ const CANNED = {
 const FILE_NOTE = "(El mensaje venía con un archivo o una foto. Harmony todavía no puede leer archivos.)";
 
 /** Shared contact cards, in words for the model. The card is data: who to register is decided by tools. */
-function describeContacts(contacts: NonNullable<InboundMessage["contacts"]>): string {
+function describeContacts(contacts: SharedContact[]): string {
   const cards = contacts.map(
     (card) => `${card.name || "sin nombre"}, ${card.phone ? `teléfono ${card.phone}` : "sin número que se pueda usar"}`,
   );
@@ -59,6 +59,31 @@ async function hear(deps: TurnDeps, inbound: InboundMessage): Promise<{ text: st
   }
 }
 
+/**
+ * What an inbound message says, as the text kept and shown to the model. `canned` is set when
+ * it cannot be used and gets a fixed reply instead of a turn. Null when there is nothing in it.
+ */
+async function readInbound(
+  deps: TurnDeps,
+  person: Person,
+  inbound: InboundMessage,
+): Promise<{ body: string; canned?: string } | null> {
+  const cards = inbound.contacts?.length ? describeContacts(inbound.contacts) : "";
+  const written = [inbound.text.trim(), cards].filter(Boolean).join("\n\n");
+  if (written) return { body: inbound.attachment ? `${written}\n\n${FILE_NOTE}` : written };
+  if (inbound.audio || inbound.audioFailed || inbound.audioTooLarge) {
+    const heard = await hear(deps, inbound);
+    // The log keeps the length and whether it was understood, never the words.
+    await recordEvent(deps.db, "voice_note", person.id, {
+      seconds: inbound.audio?.seconds ?? inbound.audioSeconds ?? null,
+      transcribed: "text" in heard,
+    });
+    return "text" in heard ? { body: heard.text } : { body: "(nota de voz que no se pudo usar)", canned: heard.reply };
+  }
+  if (inbound.attachment) return { body: "(archivo sin texto)", canned: CANNED.file };
+  return null;
+}
+
 /** One inbound message, start to finish: who it is, what they may see, the model, the reply. */
 export async function handleMessage(deps: TurnDeps, inbound: InboundMessage): Promise<void> {
   const { db } = deps;
@@ -69,40 +94,23 @@ export async function handleMessage(deps: TurnDeps, inbound: InboundMessage): Pr
     await recordEvent(db, "unknown_sender", null, { phone_ending: inbound.fromPhone.slice(-4) });
     return;
   }
-  let text = inbound.text.trim();
-  if (inbound.contacts?.length) text = [text, describeContacts(inbound.contacts)].filter(Boolean).join("\n\n");
-  let canned: string | null = null;
-  const voice = inbound.audio || inbound.audioFailed || inbound.audioTooLarge;
-  if (!text && voice) {
-    const heard = await hear(deps, inbound);
-    // The log keeps the length and whether it was understood, never the words.
-    await recordEvent(db, "voice_note", person.id, {
-      seconds: inbound.audio?.seconds ?? inbound.audioSeconds ?? null,
-      transcribed: "text" in heard,
-    });
-    if ("text" in heard) text = heard.text;
-    else canned = heard.reply;
-  } else if (!text && inbound.attachment) {
-    canned = CANNED.file;
-  } else if (!text) {
+  const read = await readInbound(deps, person, inbound);
+  if (!read) {
     await recordEvent(db, "empty_message", person.id);
     return;
-  } else if (inbound.attachment) {
-    text = `${text}\n\n${FILE_NOTE}`;
   }
-
   const history = await recentMessages(db, person);
   await db.query("INSERT INTO messages (person_id, direction, body, sent_at) VALUES ($1, 'in', $2, now())", [
     person.id,
-    text || (voice ? "(nota de voz que no se pudo usar)" : "(archivo sin texto)"),
+    read.body,
   ]);
   await recordEvent(db, "message_in", person.id);
-  if (canned) {
-    await enqueue(db, person.id, canned);
+  if (read.canned) {
+    await enqueue(db, person.id, read.canned);
   } else {
     const progress = { acted: false };
     try {
-      await runTurn(deps, person, history, text, progress);
+      await runTurn(deps, person, history, read.body, progress);
     } catch (error) {
       await recordEvent(db, "error", person.id, { message: error instanceof Error ? error.message : String(error) });
       // Asking to try again after something was already done would do it twice.

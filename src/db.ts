@@ -10,9 +10,8 @@ export interface Db {
   close(): Promise<void>;
 }
 
-/** What a database must offer for the migrations to be applied to it. */
-export interface Migratable {
-  query<Row>(sql: string, params?: unknown[]): Promise<Row[]>;
+/** A database the migrations can be applied to. */
+export interface Migratable extends Pick<Db, "query"> {
   /** Runs a whole migration file and records its name, together or not at all. */
   applyMigration(name: string, sql: string): Promise<void>;
 }
@@ -29,7 +28,7 @@ export async function migrate(target: Migratable): Promise<void> {
   }
 }
 
-function migratablePglite(pg: PGlite): Migratable {
+function pgliteDb(pg: PGlite): Db & Migratable {
   return {
     async query<Row>(sql: string, params: unknown[] = []) {
       return (await pg.query<Row>(sql, params)).rows;
@@ -40,6 +39,7 @@ function migratablePglite(pg: PGlite): Migratable {
         await tx.query("INSERT INTO schema_migrations (name) VALUES ($1)", [name]);
       });
     },
+    close: () => pg.close(),
   };
 }
 
@@ -49,7 +49,7 @@ let emptyDatabase: Promise<Blob | File> | null = null;
 async function openInMemory(): Promise<PGlite> {
   emptyDatabase ??= (async () => {
     const seed = new PGlite();
-    await migrate(migratablePglite(seed));
+    await migrate(pgliteDb(seed));
     const snapshot = await seed.dumpDataDir("none");
     await seed.close();
     return snapshot;
@@ -65,18 +65,9 @@ async function openInMemory(): Promise<PGlite> {
  */
 export async function openDb(target?: string): Promise<Db> {
   if (target && /^postgres(ql)?:\/\//.test(target)) return openPostgres(target);
-  let pg: PGlite;
-  if (target) {
-    await mkdir(dirname(resolve(target)), { recursive: true });
-    pg = new PGlite(target);
-    await migrate(migratablePglite(pg));
-  } else {
-    pg = await openInMemory();
-  }
-  return {
-    async query<Row>(sql: string, params: unknown[] = []) {
-      return (await pg.query<Row>(sql, params)).rows;
-    },
-    close: () => pg.close(),
-  };
+  if (!target) return pgliteDb(await openInMemory());
+  await mkdir(dirname(resolve(target)), { recursive: true });
+  const db = pgliteDb(new PGlite(target));
+  await migrate(db);
+  return db;
 }

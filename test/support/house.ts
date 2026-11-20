@@ -16,7 +16,6 @@ export interface InventedHouse {
   leo: Person;
 }
 
-/** An invented house: Ana runs it, Rosa and Beto work in it, Leo is a child. No real data. */
 /**
  * With HARMONY_TEST_DB=postgres every test house lives behind a Postgres wire server and is
  * reached with the production driver, so the whole suite also checks that driver.
@@ -26,11 +25,22 @@ async function openTestDb(): Promise<Db> {
   const { PGlite } = await import("@electric-sql/pglite");
   const { PGLiteSocketServer } = await import("@electric-sql/pglite-socket");
   const port = 20000 + Math.floor(Math.random() * 20000);
-  const server = new PGLiteSocketServer({ db: new PGlite(), port, host: "127.0.0.1", maxConnections: 5 });
+  const backing = new PGlite();
+  const server = new PGLiteSocketServer({ db: backing, port, host: "127.0.0.1", maxConnections: 5 });
   await server.start();
-  return openDb(`postgres://postgres:postgres@127.0.0.1:${port}/postgres`);
+  const db = await openDb(`postgres://postgres:postgres@127.0.0.1:${port}/postgres`);
+  return {
+    query: db.query,
+    // Each test house is a whole database server: left open, a long run exhausts the memory.
+    async close() {
+      await db.close();
+      await server.stop();
+      await backing.close();
+    },
+  };
 }
 
+/** An invented house: Ana runs it, Rosa and Beto work in it, Leo is a child. No real data. */
 export async function inventedHouse(): Promise<InventedHouse> {
   const db = await openTestDb();
   const ana = await addPerson(db, { name: "Ana", kind: "coordinator", phone: PHONES.ana });

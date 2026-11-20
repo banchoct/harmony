@@ -6,7 +6,7 @@ import { migrate, type Db } from "./db.js";
 const REMOTE_TLS = new Set(["require", "verify-ca", "verify-full"]);
 const SUPABASE_CA = new URL("../certs/prod-ca-2021.crt", import.meta.url);
 
-export type PostgresSsl = false | { rejectUnauthorized: true; ca: string[] };
+type PostgresSsl = false | { rejectUnauthorized: true; ca: string[] };
 
 function isLocalHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1";
